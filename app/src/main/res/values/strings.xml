@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">自动化群控</string>
+    <string name="accessibility_service_description">用于执行各类社交媒体自动化任务（如 Facebook 自动分享）。</string>
+</resources>

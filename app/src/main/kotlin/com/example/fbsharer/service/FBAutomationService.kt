@@ -180,6 +180,27 @@ class FBAutomationService : AccessibilityService() {
         }
     }
 
+    private fun navigateToGroupSearch(groupName: String) {
+        val encodedGroup = URLEncoder.encode(groupName, "UTF-8")
+        val url = "https://m.facebook.com/groups/search/?q=$encodedGroup"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        intent.setPackage("com.android.chrome")
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+    }
+
+    private fun inputToFocusedNode(text: String): Boolean {
+        val rootNode = rootInActiveWindow ?: return false
+        val focusedNode = rootNode.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (focusedNode != null && focusedNode.isEditable) {
+            val arguments = Bundle()
+            arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            return true
+        }
+        return false
+    }
+
     private fun clickNodeByText(text: String, exact: Boolean): Boolean {
         val rootNode = rootInActiveWindow ?: return false
         val nodes = if (exact) {

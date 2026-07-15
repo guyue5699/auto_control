@@ -8,6 +8,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.fbsharer.data.PostTask
 import com.example.fbsharer.data.TaskStatus
+import android.widget.Toast
 import kotlinx.coroutines.*
 import android.net.Uri
 import java.net.URLEncoder
@@ -28,6 +29,9 @@ class FBAutomationService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         Log.d(TAG, "Service Connected")
+        serviceScope.launch {
+            Toast.makeText(this@FBAutomationService, "自动化群控服务已就绪", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -40,8 +44,6 @@ class FBAutomationService : AccessibilityService() {
 
         // We can monitor window changes to decide next steps
         val rootNode = rootInActiveWindow ?: return
-        
-        // Log.d(TAG, "Event: ${event.eventType}, Package: ${event.packageName}")
     }
 
     override fun onInterrupt() {
@@ -53,19 +55,19 @@ class FBAutomationService : AccessibilityService() {
         isRunning = true
         step = 0
         
-        // Step 1: Open Chrome with the Post URL
-        val url = task.targetUrl
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-        intent.setPackage("com.android.chrome")
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(intent)
-            serviceScope.launch {
+        Toast.makeText(this, "正在启动全自动分享流程...", Toast.LENGTH_LONG).show()
+        Log.d(TAG, "Starting automation for task: ${task.id}")
+
+        serviceScope.launch {
+            try {
+                // 直接进入个人主页开始流程
+                navigateToUrl("https://m.facebook.com/me")
                 executeWorkflow()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting workflow: ${e.message}")
+                Toast.makeText(this@FBAutomationService, "启动失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                isRunning = false
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Chrome not found or error: ${e.message}")
-            isRunning = false
         }
     }
 

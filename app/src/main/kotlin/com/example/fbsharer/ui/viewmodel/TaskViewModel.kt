@@ -1,6 +1,7 @@
 package com.example.fbsharer.ui.viewmodel
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fbsharer.data.AppDatabase
@@ -28,8 +29,13 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startTask(task: PostTask) {
         viewModelScope.launch {
+            val service = com.example.fbsharer.service.FBAutomationService.instance
+            if (service == null) {
+                Toast.makeText(getApplication(), "无障碍服务未启动，请先开启权限", Toast.LENGTH_LONG).show()
+                return@launch
+            }
             dao.updateStatus(task.id, TaskStatus.RUNNING)
-            com.example.fbsharer.service.FBAutomationService.instance?.startAutomation(task)
+            service.startAutomation(task)
         }
     }
 

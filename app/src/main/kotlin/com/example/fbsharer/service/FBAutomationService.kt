@@ -106,44 +106,61 @@ class FBAutomationService : AccessibilityService() {
             // 重新获取当前页面的分享按钮列表
             val rootNode = rootInActiveWindow ?: break
             
-            // 优化识别：同时搜索“分享”和“Share”，并且包括 contentDescription
-            val shareTexts = listOf("分享", "Share", "发送", "Send")
+            // 深度扫描逻辑：
+            // 1. 扫描所有文字为“分享”或“Share”的节点
+            // 2. 扫描所有 contentDescription 包含“分享”或“Share”的节点
+            // 3. 扫描所有 class 为 Button 或 Image 的可点击节点（作为兜底）
             val shareNodes = mutableListOf<AccessibilityNodeInfo>()
+            val potentialTexts = listOf("分享", "Share", "发送", "Send")
             
-            for (text in shareTexts) {
-                val found = rootNode.findAccessibilityNodeInfosByText(text)
-                shareNodes.addAll(found.filter { 
-                    it.isClickable || it.parent?.isClickable == true || it.parent?.parent?.isClickable == true 
-                })
+            fun collectShareNodes(node: AccessibilityNodeInfo) {
+                val text = node.text?.toString() ?: ""
+                val desc = node.contentDescription?.toString() ?: ""
+                
+                if (potentialTexts.any { text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true) }) {
+                    if (node.isClickable || node.parent?.isClickable == true || node.parent?.parent?.isClickable == true) {
+                        shareNodes.add(node)
+                    }
+                }
+                
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { collectShareNodes(it) }
+                }
             }
             
-            if (shareNodes.isEmpty()) {
-                logBuilder.append("${System.currentTimeMillis()}: 页面上没找到任何分享按钮，尝试滚动...\n")
-                showToast("未发现分享按钮，正在向下翻页...")
+            collectShareNodes(rootNode)
+            
+            // 去重（基于节点在屏幕上的位置）
+            val uniqueShareNodes = shareNodes.distinctBy { 
+                val rect = android.graphics.Rect()
+                it.getBoundsInScreen(rect)
+                "${rect.left},${rect.top}"
+            }
+
+            if (uniqueShareNodes.isEmpty()) {
+                logBuilder.append("${System.currentTimeMillis()}: 没看到分享按钮，尝试滚动页面...\n")
+                showToast("未发现帖子，尝试向下滑动...")
                 
-                // 移除 GLOBAL_ACTION_BACK，改为寻找滚动容器进行滚动
                 val scrollableNode = findScrollableNode(rootNode)
                 if (scrollableNode != null) {
                     scrollableNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                 } else {
-                    // 兜底：如果找不到滚动容器，才尝试模拟物理按键
-                    performGlobalAction(GLOBAL_ACTION_RECENTS)
-                    delay(500)
-                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    // 如果找不到滚动容器，尝试直接发送滑动位移（需要 Android 7.0+）
+                    dispatchScroll()
                 }
-                
-                delay(3000)
-                postIndex++
+                delay(4000)
                 continue
             }
 
-            if (postIndex >= shareNodes.size) {
-                logBuilder.append("${System.currentTimeMillis()}: 当前页面没有更多帖子了\n")
-                break
+            if (postIndex >= uniqueShareNodes.size) {
+                logBuilder.append("${System.currentTimeMillis()}: 当前视图内的帖子已处理完，滚动加载更多...\n")
+                findScrollableNode(rootNode)?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                delay(3000)
+                postIndex = 0 // 重置索引以重新扫描新加载的帖子
+                continue
             }
 
-            // --- 开始分享单个帖子的流程 ---
-            val currentShareButton = shareNodes[postIndex]
+            val currentShareButton = uniqueShareNodes[postIndex]
             showToast("找到帖子，正在点击分享...")
             
             // 尝试多级点击
@@ -252,6 +269,18 @@ class FBAutomationService : AccessibilityService() {
         serviceScope.launch(Dispatchers.Main) {
             Toast.makeText(this@FBAutomationService, message, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun dispatchScroll() {
+        val path = android.graphics.Path()
+        val metrics = resources.displayMetrics
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        path.moveTo(width / 2f, height * 0.8f)
+        path.lineTo(width / 2f, height * 0.2f)
+        val builder = android.accessibilityservice.GestureDescription.Builder()
+        builder.addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 100, 500))
+        dispatchGesture(builder.build(), null, null)
     }
 
     private fun findScrollableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

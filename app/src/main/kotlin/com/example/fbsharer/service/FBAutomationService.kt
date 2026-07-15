@@ -46,33 +46,30 @@ class FBAutomationService : AccessibilityService() {
     }
 
     fun startAutomation(task: PostTask) {
+        // 强制取消旧任务
         automationJob?.cancel()
         currentTask = task
         isRunning = true
         
-        automationJob = serviceScope.launch {
-            try {
-                showToast("正在通过 Intent 唤起分享流程...")
-                
-                // 方案升级：不再通过浏览器打开，而是直接发送分享 Intent
-                // 这会强制系统弹出分享对话框，绕过浏览器内复杂的 UI 识别
-                val shareIntent = Intent(Intent.ACTION_SEND)
-                shareIntent.type = "text/plain"
-                shareIntent.putExtra(Intent.EXTRA_TEXT, "https://m.facebook.com/profile.php") // 这里的 URL 可以是主页或特定帖子
-                shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                
-                // 尝试直接定向到 Facebook 应用或 Chrome 的分享组件
-                val chooser = Intent.createChooser(shareIntent, "选择分享方式")
-                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(chooser)
-                
-                delay(5000)
+        // 关键修复：直接在当前线程执行 Intent 启动，不等待协程调度
+        try {
+            showToast("正在启动 Chrome...")
+            val url = "https://m.facebook.com/profile.php"
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            intent.setPackage("com.android.chrome")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            startActivity(intent)
+            
+            // 启动后续自动化流程
+            automationJob = serviceScope.launch {
+                delay(8000) // 给 Chrome 充足的启动和页面渲染时间
                 executeWorkflow()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting workflow: ${e.message}")
-                showToast("启动失败: ${e.message}")
-                isRunning = false
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch Chrome: ${e.message}")
+            showToast("浏览器启动失败: ${e.message}")
+            isRunning = false
         }
     }
 

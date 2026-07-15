@@ -237,30 +237,41 @@ class FBAutomationService : AccessibilityService() {
                         }
                     }
                     
-                    if (posted) {
-                        showToast("成功分享至 $groupNameText")
-                        logBuilder.append("${System.currentTimeMillis()}: 成功分享至 $groupNameText\n")
-                        delay(6000) 
-                        break 
-                    } else {
-                        performGlobalAction(GLOBAL_ACTION_BACK)
-                        delay(2000)
-                    }
-                    groupIndex++
-                }
+            if (posted) {
+                showToast("成功分享至 $groupNameText")
+                logBuilder.append("${System.currentTimeMillis()}: 成功分享至 $groupNameText\n")
+                delay(6000) 
+                // 分享成功后，FB 通常会关闭选择列表。我们需要重新点击“分享”按钮进入下一轮
+                // 这里不再跳转回个人主页，而是留在原地继续处理
+                break 
             } else {
-                showToast("未能找到‘分享到小组’菜单")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 delay(2000)
             }
-
-            // 重新进入个人主页刷新状态，处理下一个帖子
-            navigateToUrl("https://m.facebook.com/me")
-            delay(5000)
-            postIndex++
-            
-            updateTaskLogs(logBuilder.toString())
+            groupIndex++
         }
+    } else {
+        showToast("未能找到‘分享到小组’菜单")
+        // 如果点开了分享但没找到小组选项，尝试关掉菜单
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        delay(2000)
+    }
+
+    // --- 关键修改：移除这里的 navigateToUrl("https://m.facebook.com/me") ---
+    // 这样程序就不会每次处理完一个帖子都刷新回顶部了
+    
+    postIndex++
+    
+    // 如果处理完当前视野内的所有分享按钮，执行一次平滑滚动
+    if (postIndex >= uniqueShareNodes.size) {
+        showToast("当前屏幕帖子处理完毕，正在向下寻找更多...")
+        dispatchScroll()
+        delay(4000)
+        postIndex = 0 // 重置索引，开始扫描新滚动出来的按钮
+    }
+    
+    updateTaskLogs(logBuilder.toString())
+}
         
         finishTask(logBuilder.toString())
     }

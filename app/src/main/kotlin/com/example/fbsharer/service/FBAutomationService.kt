@@ -16,8 +16,8 @@ import java.net.URLEncoder
 class FBAutomationService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
+    private var automationJob: Job? = null
     private var currentTask: PostTask? = null
-    private var step = 0
     private var isRunning = false
 
     companion object {
@@ -29,49 +29,42 @@ class FBAutomationService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         Log.d(TAG, "Service Connected")
-        serviceScope.launch {
-            Toast.makeText(this@FBAutomationService, "自动化群控服务已就绪", Toast.LENGTH_SHORT).show()
-        }
+        showToast("自动化群控服务已就绪")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        automationJob?.cancel()
         return super.onUnbind(intent)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (!isRunning || currentTask == null) return
-
-        // We can monitor window changes to decide next steps
-        val rootNode = rootInActiveWindow ?: return
-    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {}
 
     override fun onInterrupt() {
         isRunning = false
+        automationJob?.cancel()
     }
 
     fun startAutomation(task: PostTask) {
+        // 如果已有任务在运行，先停止它
+        automationJob?.cancel()
+        
         currentTask = task
         isRunning = true
-        step = 0
         
-        Toast.makeText(this, "正在跳转至您的个人主页...", Toast.LENGTH_LONG).show()
-        Log.d(TAG, "Starting automation for task: ${task.id}")
-
-        serviceScope.launch {
+        automationJob = serviceScope.launch {
             try {
-                // 第一步：先进入 Facebook 触屏版首页，确保登录态
-                navigateToUrl("https://m.facebook.com/")
-                delay(3000)
-                
-                // 第二步：通过特定的 profile 链接进入，这在移动端最稳定
+                // 直接进入个人主页（移动端最稳地址）
+                showToast("正在前往个人主页...")
                 navigateToUrl("https://m.facebook.com/profile.php")
-                delay(6000)
+                
+                // 等待页面加载（初始加载给长一点时间）
+                delay(8000)
                 
                 executeWorkflow()
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting workflow: ${e.message}")
-                Toast.makeText(this@FBAutomationService, "启动失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                showToast("启动失败: ${e.message}")
                 isRunning = false
             }
         }
@@ -83,41 +76,51 @@ class FBAutomationService : AccessibilityService() {
 
         logBuilder.append("${System.currentTimeMillis()}: 开始全自动分享任务\n")
         
-        // 确保已经在主页，如果还在广场，尝试点击头像进入
-        val rootNode = rootInActiveWindow
-        if (rootNode != null) {
-            val profileTexts = listOf("个人主页", "Profile", "我的", "Me")
-            for (text in profileTexts) {
-                if (clickNodeByText(text, false)) {
-                    showToast("检测到还在广场，尝试点击进入个人主页...")
-                    delay(5000)
-                    break
-                }
-            }
-        }
-
         var postIndex = 0
-        val maxPosts = 5 // 限制处理最近的5个帖子，避免账号异常
+        val maxPosts = 20 // 增加处理上限
+        val potentialTexts = listOf("分享", "Share", "转发", "发送", "Send")
+        val shareToGroupTexts = listOf("Share to a group", "分享到小组", "在小组中分享", "Group")
+        val postTexts = listOf("POST", "Post", "发布", "确定", "分享", "Send")
         
         while (postIndex < maxPosts && isRunning) {
-            logBuilder.append("${System.currentTimeMillis()}: 准备处理第 ${postIndex + 1} 个帖子\n")
+            val rootNode = rootInActiveWindow
+            if (rootNode == null) {
+                delay(2000)
+                continue
+            }
+
+            // 检查是否还在广场（如果由于 FB 重定向跳到了首页）
+            val profileTexts = listOf("个人主页", "Profile", "我的", "Me")
+            var onProfilePage = false
+            // 这里简单判断，如果看到“你在想什么”或者特定的个人主页标识，就认为在主页
+            // 实际上 profile.php 已经很稳了，我们重点放在找按钮上
+            
             showToast("正在寻找第 ${postIndex + 1} 个帖子的分享按钮...")
             
-            // 重新获取当前页面的分享按钮列表
-            val rootNode = rootInActiveWindow ?: break
-            
-            // 深度扫描逻辑：
-            // 1. 扫描所有文字为“分享”或“Share”的节点
-            // 2. 扫描所有 contentDescription 包含“分享”或“Share”的节点
-            // 3. 扫描所有 class 为 Button 或 Image 的可点击节点（作为兜底）
             val shareNodes = mutableListOf<AccessibilityNodeInfo>()
-            val potentialTexts = listOf("分享", "Share", "发送", "Send")
-            
             fun collectShareNodes(node: AccessibilityNodeInfo) {
+                // 排除浏览器顶部的地址栏和搜索栏区域
+                val rect = android.graphics.Rect()
+                node.getBoundsInScreen(rect)
+                // 假设屏幕顶部 15% 的区域是浏览器工具栏，排除掉
+                val metrics = resources.displayMetrics
+                if (rect.top < metrics.heightPixels * 0.15) {
+                    for (i in 0 until node.childCount) {
+                        node.getChild(i)?.let { collectShareNodes(it) }
+                    }
+                    return
+                }
+
                 val text = node.text?.toString() ?: ""
                 val desc = node.contentDescription?.toString() ?: ""
                 
-                if (potentialTexts.any { text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true) }) {
+                // 增加更精确的过滤，排除掉“搜索”、“输入”等字样
+                val isSearchInput = text.contains("搜索", ignoreCase = true) || 
+                                  text.contains("Search", ignoreCase = true) ||
+                                  desc.contains("搜索", ignoreCase = true) ||
+                                  desc.contains("Search", ignoreCase = true)
+
+                if (!isSearchInput && potentialTexts.any { text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true) }) {
                     if (node.isClickable || node.parent?.isClickable == true || node.parent?.parent?.isClickable == true) {
                         shareNodes.add(node)
                     }
@@ -127,63 +130,39 @@ class FBAutomationService : AccessibilityService() {
                     node.getChild(i)?.let { collectShareNodes(it) }
                 }
             }
-            
             collectShareNodes(rootNode)
             
-            // 去重（基于节点在屏幕上的位置）
             val uniqueShareNodes = shareNodes.distinctBy { 
                 val rect = android.graphics.Rect()
                 it.getBoundsInScreen(rect)
                 "${rect.left},${rect.top}"
             }
 
-            if (uniqueShareNodes.isEmpty()) {
-                logBuilder.append("${System.currentTimeMillis()}: 没看到分享按钮，尝试滚动页面...\n")
-                showToast("未发现帖子，尝试向下滑动...")
-                
-                val scrollableNode = findScrollableNode(rootNode)
-                if (scrollableNode != null) {
-                    scrollableNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                } else {
-                    // 如果找不到滚动容器，尝试直接发送滑动位移（需要 Android 7.0+）
-                    dispatchScroll()
-                }
+            if (uniqueShareNodes.isEmpty() || postIndex >= uniqueShareNodes.size) {
+                showToast("当前位置未发现更多帖子，正在向下滚动...")
+                dispatchScroll()
                 delay(4000)
-                continue
-            }
-
-            if (postIndex >= uniqueShareNodes.size) {
-                logBuilder.append("${System.currentTimeMillis()}: 当前视图内的帖子已处理完，滚动加载更多...\n")
-                findScrollableNode(rootNode)?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                delay(3000)
-                postIndex = 0 // 重置索引以重新扫描新加载的帖子
+                postIndex = 0 // 滚动后重新从新屏幕的第一个开始找
                 continue
             }
 
             val currentShareButton = uniqueShareNodes[postIndex]
-            showToast("找到帖子，正在点击分享...")
+            showToast("找到帖子，准备分享...")
             
-            // 尝试多级点击
             var clicked = false
             if (currentShareButton.isClickable) {
                 clicked = currentShareButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }
-            if (!clicked) {
-                clicked = currentShareButton.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
-            }
-            if (!clicked) {
-                clicked = currentShareButton.parent?.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
-            }
+            if (!clicked) clicked = currentShareButton.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+            if (!clicked) clicked = currentShareButton.parent?.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
 
             if (!clicked) {
-                showToast("点击分享按钮失败")
                 postIndex++
                 continue
             }
             delay(3000)
 
             // 点击“分享到小组”
-            val shareToGroupTexts = listOf("Share to a group", "分享到小组", "在小组中分享", "Group")
             var foundGroupOption = false
             for (text in shareToGroupTexts) {
                 if (clickNodeByText(text, false)) {
@@ -193,42 +172,30 @@ class FBAutomationService : AccessibilityService() {
             }
             
             if (foundGroupOption) {
-                showToast("已进入群组选择列表")
-                delay(5000) // 等待群组列表加载
+                showToast("进入群组列表")
+                delay(4000)
                 
-                // --- 自动化遍历群组列表 ---
                 var groupIndex = 0
-                val maxGroupsPerPost = 10 
-                
-                while (groupIndex < maxGroupsPerPost && isRunning) {
+                while (groupIndex < 10 && isRunning) {
                     val groupListRoot = rootInActiveWindow ?: break
                     val clickableNodes = mutableListOf<AccessibilityNodeInfo>()
                     findClickableNodes(groupListRoot, clickableNodes)
                     
-                    // 过滤掉头部的搜索框和返回按钮等干扰项
                     val targetGroups = clickableNodes.filter { 
                         val txt = it.text?.toString() ?: it.contentDescription?.toString() ?: ""
-                        txt != "搜索小组" && txt != "Search" && txt != "返回" && txt.isNotBlank() &&
-                        !shareToGroupTexts.contains(txt) && !potentialTexts.contains(txt)
+                        txt.isNotBlank() && !shareToGroupTexts.contains(txt) && !potentialTexts.contains(txt) &&
+                        txt != "搜索小组" && txt != "Search" && txt != "返回"
                     }
 
-                    if (groupIndex >= targetGroups.size) {
-                        logBuilder.append("${System.currentTimeMillis()}: 该帖子已处理完列表可见群组\n")
-                        break
-                    }
+                    if (groupIndex >= targetGroups.size) break
 
                     val groupNode = targetGroups[groupIndex]
-                    val groupNameText = groupNode.text?.toString() ?: groupNode.contentDescription?.toString() ?: "未知群组"
+                    val groupName = groupNode.text?.toString() ?: groupNode.contentDescription?.toString() ?: "未知群组"
                     
-                    showToast("分享至: $groupNameText")
-                    logBuilder.append("${System.currentTimeMillis()}: 正在分享至 -> $groupNameText\n")
-                    
-                    // 点击选中的群组
+                    showToast("转发至: $groupName")
                     groupNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     delay(3000)
                     
-                    // 点击最终的“发布/分享”按钮
-                    val postTexts = listOf("POST", "Post", "发布", "确定", "分享", "Send")
                     var posted = false
                     for (text in postTexts) {
                         if (clickNodeByText(text, true)) {
@@ -237,41 +204,27 @@ class FBAutomationService : AccessibilityService() {
                         }
                     }
                     
-            if (posted) {
-                showToast("成功分享至 $groupNameText")
-                logBuilder.append("${System.currentTimeMillis()}: 成功分享至 $groupNameText\n")
-                delay(6000) 
-                // 分享成功后，FB 通常会关闭选择列表。我们需要重新点击“分享”按钮进入下一轮
-                // 这里不再跳转回个人主页，而是留在原地继续处理
-                break 
+                    if (posted) {
+                        showToast("分享成功")
+                        delay(5000)
+                        break // 分享成功后 FB 会关闭弹窗，跳出群组循环
+                    } else {
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                        delay(2000)
+                    }
+                    groupIndex++
+                }
             } else {
+                // 如果没找到分享到小组，可能点错或者是其他菜单，点返回
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 delay(2000)
             }
-            groupIndex++
+            
+            postIndex++
+            updateTaskLogs(logBuilder.toString())
         }
-    } else {
-        showToast("未能找到‘分享到小组’菜单")
-        // 如果点开了分享但没找到小组选项，尝试关掉菜单
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        delay(2000)
+        finishTask(logBuilder.toString())
     }
-
-    // --- 关键修改：移除这里的 navigateToUrl("https://m.facebook.com/me") ---
-    // 这样程序就不会每次处理完一个帖子都刷新回顶部了
-    
-    postIndex++
-    
-    // 如果处理完当前视野内的所有分享按钮，执行一次平滑滚动
-    if (postIndex >= uniqueShareNodes.size) {
-        showToast("当前屏幕帖子处理完毕，正在向下寻找更多...")
-        dispatchScroll()
-        delay(4000)
-        postIndex = 0 // 重置索引，开始扫描新滚动出来的按钮
-    }
-    
-    updateTaskLogs(logBuilder.toString())
-}
         
         finishTask(logBuilder.toString())
     }

@@ -46,21 +46,27 @@ class FBAutomationService : AccessibilityService() {
     }
 
     fun startAutomation(task: PostTask) {
-        // 如果已有任务在运行，先停止它
         automationJob?.cancel()
-        
         currentTask = task
         isRunning = true
         
         automationJob = serviceScope.launch {
             try {
-                // 直接进入个人主页（移动端最稳地址）
-                showToast("正在前往个人主页...")
-                navigateToUrl("https://m.facebook.com/profile.php")
+                showToast("正在通过 Intent 唤起分享流程...")
                 
-                // 等待页面加载（初始加载给长一点时间）
-                delay(8000)
+                // 方案升级：不再通过浏览器打开，而是直接发送分享 Intent
+                // 这会强制系统弹出分享对话框，绕过浏览器内复杂的 UI 识别
+                val shareIntent = Intent(Intent.ACTION_SEND)
+                shareIntent.type = "text/plain"
+                shareIntent.putExtra(Intent.EXTRA_TEXT, "https://m.facebook.com/profile.php") // 这里的 URL 可以是主页或特定帖子
+                shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 
+                // 尝试直接定向到 Facebook 应用或 Chrome 的分享组件
+                val chooser = Intent.createChooser(shareIntent, "选择分享方式")
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(chooser)
+                
+                delay(5000)
                 executeWorkflow()
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting workflow: ${e.message}")

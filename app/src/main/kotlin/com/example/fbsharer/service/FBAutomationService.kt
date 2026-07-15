@@ -55,13 +55,19 @@ class FBAutomationService : AccessibilityService() {
         isRunning = true
         step = 0
         
-        Toast.makeText(this, "正在启动全自动分享流程...", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "正在跳转至您的个人主页...", Toast.LENGTH_LONG).show()
         Log.d(TAG, "Starting automation for task: ${task.id}")
 
         serviceScope.launch {
             try {
-                // 直接进入个人主页开始流程
-                navigateToUrl("https://m.facebook.com/me")
+                // 第一步：先进入 Facebook 触屏版首页，确保登录态
+                navigateToUrl("https://m.facebook.com/")
+                delay(3000)
+                
+                // 第二步：通过特定的 profile 链接进入，这在移动端最稳定
+                navigateToUrl("https://m.facebook.com/profile.php")
+                delay(6000)
+                
                 executeWorkflow()
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting workflow: ${e.message}")
@@ -75,11 +81,20 @@ class FBAutomationService : AccessibilityService() {
         val task = currentTask ?: return
         val logBuilder = StringBuilder()
 
-        logBuilder.append("${System.currentTimeMillis()}: 开始全自动分享任务（所有帖子 -> 所有小组）\n")
+        logBuilder.append("${System.currentTimeMillis()}: 开始全自动分享任务\n")
         
-        // 1. 进入个人主页
-        navigateToUrl("https://m.facebook.com/me")
-        delay(6000)
+        // 确保已经在主页，如果还在广场，尝试点击头像进入
+        val rootNode = rootInActiveWindow
+        if (rootNode != null) {
+            val profileTexts = listOf("个人主页", "Profile", "我的", "Me")
+            for (text in profileTexts) {
+                if (clickNodeByText(text, false)) {
+                    showToast("检测到还在广场，尝试点击进入个人主页...")
+                    delay(5000)
+                    break
+                }
+            }
+        }
 
         var postIndex = 0
         val maxPosts = 5 // 限制处理最近的5个帖子，避免账号异常

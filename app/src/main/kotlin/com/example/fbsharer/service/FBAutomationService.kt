@@ -97,45 +97,68 @@ class FBAutomationService : AccessibilityService() {
             
             showToast("正在寻找第 ${postIndex + 1} 个帖子的分享按钮...")
             
-            val shareNodes = mutableListOf<AccessibilityNodeInfo>()
-            fun collectShareNodes(node: AccessibilityNodeInfo) {
-                // 排除浏览器顶部的地址栏和搜索栏区域
+            // --- 核心升级：基于布局结构的精准识别 ---
+            // 1. 寻找帖子容器 (Post Container)
+            val postContainers = mutableListOf<AccessibilityNodeInfo>()
+            fun findContainers(node: AccessibilityNodeInfo) {
+                // Facebook 帖子的容器通常具有特定的特征：包含多个子节点且高度较大
                 val rect = android.graphics.Rect()
                 node.getBoundsInScreen(rect)
-                // 假设屏幕顶部 15% 的区域是浏览器工具栏，排除掉
                 val metrics = resources.displayMetrics
-                if (rect.top < metrics.heightPixels * 0.15) {
-                    for (i in 0 until node.childCount) {
-                        node.getChild(i)?.let { collectShareNodes(it) }
-                    }
-                    return
-                }
-
-                val text = node.text?.toString() ?: ""
-                val desc = node.contentDescription?.toString() ?: ""
                 
-                // 增加更精确的过滤，排除掉“搜索”、“输入”等字样
-                val isSearchInput = text.contains("搜索", ignoreCase = true) || 
-                                  text.contains("Search", ignoreCase = true) ||
-                                  desc.contains("搜索", ignoreCase = true) ||
-                                  desc.contains("Search", ignoreCase = true)
-
-                if (!isSearchInput && potentialTexts.any { text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true) }) {
-                    if (node.isClickable || node.parent?.isClickable == true || node.parent?.parent?.isClickable == true) {
-                        shareNodes.add(node)
-                    }
-                }
+                // 排除顶部工具栏
+                if (rect.top < metrics.heightPixels * 0.15) return
                 
+                // 识别特征：高度在屏幕 20% 到 80% 之间，且子节点较多
+                if (rect.height() > metrics.heightPixels * 0.2 && node.childCount > 5) {
+                    postContainers.add(node)
+                }
                 for (i in 0 until node.childCount) {
-                    node.getChild(i)?.let { collectShareNodes(it) }
+                    node.getChild(i)?.let { findContainers(it) }
                 }
             }
-            collectShareNodes(rootNode)
+            findContainers(rootNode)
+
+            // 2. 在容器内寻找动作条 (Action Bar) 并锁定分享按钮
+            val shareNodes = mutableListOf<AccessibilityNodeInfo>()
+            for (container in postContainers) {
+                // 在帖子容器底部区域寻找按钮
+                val containerRect = android.graphics.Rect()
+                container.getBoundsInScreen(containerRect)
+                
+                fun findShareInContainer(node: AccessibilityNodeInfo) {
+                    val nodeRect = android.graphics.Rect()
+                    node.getBoundsInScreen(nodeRect)
+                    
+                    // 特征：位于容器底部 30% 区域，且位于右侧 40% 区域
+                    val isAtBottom = nodeRect.top > containerRect.top + containerRect.height() * 0.6
+                    val isAtRight = nodeRect.left > containerRect.left + containerRect.width() * 0.5
+                    
+                    if (isAtBottom && isAtRight && (node.isClickable || node.parent?.isClickable == true)) {
+                        // 进一步检查是否包含分享相关的关键词或图标特征
+                        val text = node.text?.toString() ?: ""
+                        val desc = node.contentDescription?.toString() ?: ""
+                        if (potentialTexts.any { text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true) } || 
+                            node.className.contains("Button") || node.className.contains("Image")) {
+                            shareNodes.add(node)
+                        }
+                    }
+                    
+                    for (i in 0 until node.childCount) {
+                        node.getChild(i)?.let { findShareInContainer(it) }
+                    }
+                }
+                findShareInContainer(container)
+            }
             
             val uniqueShareNodes = shareNodes.distinctBy { 
                 val rect = android.graphics.Rect()
                 it.getBoundsInScreen(rect)
                 "${rect.left},${rect.top}"
+            }.sortedBy { 
+                val rect = android.graphics.Rect()
+                it.getBoundsInScreen(rect)
+                rect.top 
             }
 
             if (uniqueShareNodes.isEmpty() || postIndex >= uniqueShareNodes.size) {

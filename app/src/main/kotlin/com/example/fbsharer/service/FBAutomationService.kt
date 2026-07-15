@@ -71,40 +71,42 @@ class FBAutomationService : AccessibilityService() {
 
     private suspend fun executeWorkflow() {
         val task = currentTask ?: return
-        val groups = task.groupNames.split(",").map { it.trim() }
         val logBuilder = StringBuilder()
 
-        for (groupName in groups) {
-            if (!isRunning) break
+        logBuilder.append("${System.currentTimeMillis()}: 开始全自动分享任务（所有帖子 -> 所有小组）\n")
+        
+        // 1. 进入个人主页
+        navigateToUrl("https://m.facebook.com/me")
+        delay(6000)
+
+        var postIndex = 0
+        val maxPosts = 5 // 限制处理最近的5个帖子，避免账号异常
+        
+        while (postIndex < maxPosts && isRunning) {
+            logBuilder.append("${System.currentTimeMillis()}: 准备处理第 ${postIndex + 1} 个帖子\n")
             
-            logBuilder.append("${System.currentTimeMillis()}: 开始处理分享至群组 $groupName\n")
-            Log.d(TAG, "Starting share to group: $groupName")
+            // 重新获取当前页面的分享按钮列表
+            val rootNode = rootInActiveWindow ?: break
+            val shareNodes = rootNode.findAccessibilityNodeInfosByText("分享")
+                .filter { it.isClickable || it.parent?.isClickable == true }
             
-            // 1. Ensure we are on the post page (re-navigate for each group to reset state)
-            if (groups.indexOf(groupName) > 0) {
-                navigateToUrl(task.targetUrl)
-                delay(4000)
-            } else {
-                delay(5000) // Initial load wait
+            if (postIndex >= shareNodes.size) {
+                logBuilder.append("${System.currentTimeMillis()}: 当前页面没有更多帖子了\n")
+                break
             }
 
-            // 2. Find and click "Share" button
-            val shareTexts = listOf("Share", "分享", "发送")
-            var foundShare = false
-            for (text in shareTexts) {
-                if (clickNodeByText(text, false)) {
-                    foundShare = true
-                    break
-                }
-            }
+            // --- 开始分享单个帖子的流程 ---
+            val currentShareButton = shareNodes[postIndex]
             
-            if (!foundShare) {
-                logBuilder.append("${System.currentTimeMillis()}: 找不到分享按钮\n")
-                continue
+            // 点击分享按钮
+            if (currentShareButton.isClickable) {
+                currentShareButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } else {
+                currentShareButton.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }
             delay(2000)
 
-            // 3. Find and click "Share to a group"
+            // 点击“分享到小组”
             val shareToGroupTexts = listOf("Share to a group", "分享到小组", "在小组中分享")
             var foundGroupOption = false
             for (text in shareToGroupTexts) {
@@ -114,57 +116,89 @@ class FBAutomationService : AccessibilityService() {
                 }
             }
             
-            if (!foundGroupOption) {
-                logBuilder.append("${System.currentTimeMillis()}: 找不到‘分享到小组’选项\n")
-                continue
-            }
-            delay(3000)
-            
-            // 4. Search for the group name
-            val searchHints = listOf("Search for groups", "搜索小组", "查找")
-            var searched = false
-            for (hint in searchHints) {
-                if (inputByText(hint, groupName)) {
-                    searched = true
-                    break
-                }
-            }
-            
-            if (!searched) {
-                // Try focusing and typing if hint not found
-                inputToFocusedNode(groupName)
-            }
-            delay(3000)
+            if (foundGroupOption) {
+                delay(4000) // 等待群组列表加载
+                
+                // --- 自动化遍历群组列表 ---
+                var groupIndex = 0
+                val maxGroupsPerPost = 20 // 每个帖子最多分享到20个群组，防封号
+                
+                while (groupIndex < maxGroupsPerPost && isRunning) {
+                    val groupListRoot = rootInActiveWindow ?: break
+                    // 寻找列表中的群组项。在 FB 移动网页版中，群组项通常是可点击的布局
+                    // 我们通过查找页面上非搜索框、非标题的可点击元素来模拟
+                    val clickableNodes = mutableListOf<AccessibilityNodeInfo>()
+                    findClickableNodes(groupListRoot, clickableNodes)
+                    
+                    // 过滤掉头部的搜索框和返回按钮等干扰项
+                    // 这里的逻辑需要根据实际 UI 进一步微调，目前采取按顺序点击策略
+                    val targetGroups = clickableNodes.filter { 
+                        val txt = it.text?.toString() ?: it.contentDescription?.toString() ?: ""
+                        // 排除一些已知的干扰词
+                        txt != "搜索小组" && txt != "Search" && txt != "返回" && txt.isNotBlank()
+                    }
 
-            // 5. Click the group from search results
-            if (!clickNodeByText(groupName, false)) {
-                logBuilder.append("${System.currentTimeMillis()}: 搜索结果中找不到群组 $groupName\n")
-                continue
-            }
-            delay(3000)
-            
-            // 6. Click Post
-            val postTexts = listOf("POST", "Post", "发布", "确定", "分享")
-            var posted = false
-            for (text in postTexts) {
-                if (clickNodeByText(text, true)) {
-                    posted = true
-                    break
+                    if (groupIndex >= targetGroups.size) {
+                        logBuilder.append("${System.currentTimeMillis()}: 帖子 ${postIndex + 1} 已处理完列表中的所有群组\n")
+                        break
+                    }
+
+                    val groupNode = targetGroups[groupIndex]
+                    val groupNameText = groupNode.text?.toString() ?: "未知群组"
+                    
+                    logBuilder.append("${System.currentTimeMillis()}: 帖子 ${postIndex + 1} 正在分享至 -> $groupNameText\n")
+                    
+                    // 点击选中的群组
+                    groupNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    delay(3000)
+                    
+                    // 点击最终的“发布/分享”按钮
+                    val postTexts = listOf("POST", "Post", "发布", "确定", "分享")
+                    var posted = false
+                    for (text in postTexts) {
+                        if (clickNodeByText(text, true)) {
+                            posted = true
+                            break
+                        }
+                    }
+                    
+                    if (posted) {
+                        logBuilder.append("${System.currentTimeMillis()}: 成功分享至 $groupNameText\n")
+                        delay(5000) // 关键：群组间分享必须有较长延迟，防止封号
+                        
+                        // 分享成功后，FB 通常会关闭选择列表。我们需要重新点击“分享”按钮进入下一轮
+                        // 所以这里需要跳出群组循环，重新点击该帖子的分享按钮
+                        break 
+                    } else {
+                        // 如果没发布成功，尝试返回上一级
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                        delay(2000)
+                    }
+                    groupIndex++
                 }
             }
-            
-            if (posted) {
-                logBuilder.append("${System.currentTimeMillis()}: 群组 $groupName 分享指令已发送\n")
-            } else {
-                logBuilder.append("${System.currentTimeMillis()}: 群组 $groupName 发布按钮点击失败\n")
-            }
+
+            // 重新进入个人主页刷新状态，处理下一个帖子
+            navigateToUrl("https://m.facebook.com/me")
             delay(5000)
+            postIndex++
             
-            // Update logs in DB
             updateTaskLogs(logBuilder.toString())
         }
         
         finishTask(logBuilder.toString())
+    }
+
+    private fun findClickableNodes(node: AccessibilityNodeInfo, list: MutableList<AccessibilityNodeInfo>) {
+        if (node.isClickable && node.isVisibleToUser) {
+            list.add(node)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i)
+            if (child != null) {
+                findClickableNodes(child, list)
+            }
+        }
     }
 
     private fun navigateToUrl(url: String) {

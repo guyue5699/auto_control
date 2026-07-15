@@ -53,11 +53,8 @@ class FBAutomationService : AccessibilityService() {
         isRunning = true
         step = 0
         
-        // Step 1: Open Chrome with Facebook Search
-        val firstGroup = task.groupNames.split(",")[0].trim()
-        val encodedGroup = URLEncoder.encode(firstGroup, "UTF-8")
-        val url = "https://m.facebook.com/groups/search/?q=$encodedGroup"
-        
+        // Step 1: Open Chrome with the Post URL
+        val url = task.targetUrl
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
         intent.setPackage("com.android.chrome")
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -80,58 +77,74 @@ class FBAutomationService : AccessibilityService() {
         for (groupName in groups) {
             if (!isRunning) break
             
-            logBuilder.append("${System.currentTimeMillis()}: 开始处理群组 $groupName\n")
-            Log.d(TAG, "Starting post for group: $groupName")
+            logBuilder.append("${System.currentTimeMillis()}: 开始处理分享至群组 $groupName\n")
+            Log.d(TAG, "Starting share to group: $groupName")
             
-            // 1. If not on current group search page, navigate there
+            // 1. Ensure we are on the post page (re-navigate for each group to reset state)
             if (groups.indexOf(groupName) > 0) {
-                navigateToGroupSearch(groupName)
-                delay(3000)
+                navigateToUrl(task.targetUrl)
+                delay(4000)
+            } else {
+                delay(5000) // Initial load wait
             }
 
-            // 2. Click the group in search results
-            if (!clickNodeByText(groupName, false)) {
-                logBuilder.append("${System.currentTimeMillis()}: 找不到群组 $groupName\n")
-                Log.e(TAG, "Could not find group: $groupName")
-                continue
-            }
-            delay(4000)
-            
-            // 3. Click "Write something..." or "Start a post"
-            val writeSomethingTexts = listOf("Write something...", "Start a post", "写点什么...", "在此输入内容")
-            var foundWrite = false
-            for (text in writeSomethingTexts) {
+            // 2. Find and click "Share" button
+            val shareTexts = listOf("Share", "分享", "发送")
+            var foundShare = false
+            for (text in shareTexts) {
                 if (clickNodeByText(text, false)) {
-                    foundWrite = true
+                    foundShare = true
                     break
                 }
             }
             
-            if (!foundWrite) {
-                logBuilder.append("${System.currentTimeMillis()}: 找不到发帖框 $groupName\n")
-                Log.e(TAG, "Could not find 'Write something' box")
+            if (!foundShare) {
+                logBuilder.append("${System.currentTimeMillis()}: 找不到分享按钮\n")
                 continue
             }
             delay(2000)
-            
-            // 4. Input text and link
-            val content = if (task.text.isNotBlank()) "${task.text}\n\n${task.targetUrl}" else task.targetUrl
-            val inputHints = listOf("What's on your mind?", "说点什么...", "分享你的想法")
-            var foundInput = false
-            for (hint in inputHints) {
-                if (inputByText(hint, content)) {
-                    foundInput = true
+
+            // 3. Find and click "Share to a group"
+            val shareToGroupTexts = listOf("Share to a group", "分享到小组", "在小组中分享")
+            var foundGroupOption = false
+            for (text in shareToGroupTexts) {
+                if (clickNodeByText(text, false)) {
+                    foundGroupOption = true
                     break
                 }
             }
             
-            if (!foundInput) {
-                inputToFocusedNode(content)
+            if (!foundGroupOption) {
+                logBuilder.append("${System.currentTimeMillis()}: 找不到‘分享到小组’选项\n")
+                continue
             }
-            delay(3000) // Wait for link preview
+            delay(3000)
             
-            // 5. Click Post
-            val postTexts = listOf("POST", "Post", "发布", "确定")
+            // 4. Search for the group name
+            val searchHints = listOf("Search for groups", "搜索小组", "查找")
+            var searched = false
+            for (hint in searchHints) {
+                if (inputByText(hint, groupName)) {
+                    searched = true
+                    break
+                }
+            }
+            
+            if (!searched) {
+                // Try focusing and typing if hint not found
+                inputToFocusedNode(groupName)
+            }
+            delay(3000)
+
+            // 5. Click the group from search results
+            if (!clickNodeByText(groupName, false)) {
+                logBuilder.append("${System.currentTimeMillis()}: 搜索结果中找不到群组 $groupName\n")
+                continue
+            }
+            delay(3000)
+            
+            // 6. Click Post
+            val postTexts = listOf("POST", "Post", "发布", "确定", "分享")
             var posted = false
             for (text in postTexts) {
                 if (clickNodeByText(text, true)) {
@@ -141,21 +154,24 @@ class FBAutomationService : AccessibilityService() {
             }
             
             if (posted) {
-                logBuilder.append("${System.currentTimeMillis()}: 群组 $groupName 发布指令已发送\n")
+                logBuilder.append("${System.currentTimeMillis()}: 群组 $groupName 分享指令已发送\n")
             } else {
                 logBuilder.append("${System.currentTimeMillis()}: 群组 $groupName 发布按钮点击失败\n")
             }
             delay(5000)
             
-            // 6. Go back to ready for next group search
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            delay(1000)
-            
-            // Update logs in DB periodically
+            // Update logs in DB
             updateTaskLogs(logBuilder.toString())
         }
         
         finishTask(logBuilder.toString())
+    }
+
+    private fun navigateToUrl(url: String) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        intent.setPackage("com.android.chrome")
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
     }
 
     private fun updateTaskLogs(logs: String) {
@@ -183,10 +199,7 @@ class FBAutomationService : AccessibilityService() {
     private fun navigateToGroupSearch(groupName: String) {
         val encodedGroup = URLEncoder.encode(groupName, "UTF-8")
         val url = "https://m.facebook.com/groups/search/?q=$encodedGroup"
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-        intent.setPackage("com.android.chrome")
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+        navigateToUrl(url)
     }
 
     private fun inputToFocusedNode(text: String): Boolean {

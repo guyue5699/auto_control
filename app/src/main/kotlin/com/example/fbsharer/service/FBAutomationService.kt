@@ -104,10 +104,20 @@ class FBAutomationService : AccessibilityService() {
             
             if (shareNodes.isEmpty()) {
                 logBuilder.append("${System.currentTimeMillis()}: 页面上没找到任何分享按钮，尝试滚动...\n")
-                showToast("未发现分享按钮，尝试向下滚动")
-                performGlobalAction(GLOBAL_ACTION_BACK) // 简单触发刷新
-                delay(2000)
-                // 如果还是找不到，可能需要用户手动滚动一下
+                showToast("未发现分享按钮，正在向下翻页...")
+                
+                // 移除 GLOBAL_ACTION_BACK，改为寻找滚动容器进行滚动
+                val scrollableNode = findScrollableNode(rootNode)
+                if (scrollableNode != null) {
+                    scrollableNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                } else {
+                    // 兜底：如果找不到滚动容器，才尝试模拟物理按键
+                    performGlobalAction(GLOBAL_ACTION_RECENTS)
+                    delay(500)
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }
+                
+                delay(3000)
                 postIndex++
                 continue
             }
@@ -227,6 +237,18 @@ class FBAutomationService : AccessibilityService() {
         serviceScope.launch(Dispatchers.Main) {
             Toast.makeText(this@FBAutomationService, message, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun findScrollableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isScrollable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i)
+            if (child != null) {
+                val found = findScrollableNode(child)
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     private fun findClickableNodes(node: AccessibilityNodeInfo, list: MutableList<AccessibilityNodeInfo>) {

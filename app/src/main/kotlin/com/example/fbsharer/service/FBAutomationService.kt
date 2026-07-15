@@ -225,9 +225,6 @@ class FBAutomationService : AccessibilityService() {
         }
         finishTask(logBuilder.toString())
     }
-        
-        finishTask(logBuilder.toString())
-    }
 
     private fun showToast(message: String) {
         serviceScope.launch(Dispatchers.Main) {

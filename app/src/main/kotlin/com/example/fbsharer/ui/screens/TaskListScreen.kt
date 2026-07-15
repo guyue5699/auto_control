@@ -27,6 +27,7 @@ import com.example.fbsharer.utils.PermissionUtils
 @Composable
 fun TaskListScreen(
     onNavigateToCreateTask: () -> Unit,
+    onStartTask: (PostTask) -> Unit,
     viewModel: TaskViewModel = viewModel()
 ) {
     val tasks by viewModel.allTasks.collectAsState(initial = emptyList())
@@ -44,18 +45,19 @@ fun TaskListScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
+            // 无障碍权限提示（在 WebView 方案中不再是强制的，但保留作为备选）
             if (!isPermissionEnabled) {
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
                         context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
                 ) {
                     Text(
-                        text = "请点击开启无障碍服务以使用自动分享功能",
+                        text = "提示：新版已启用内嵌浏览器分享，如需使用原版自动化请开启无障碍权限",
                         modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
                     )
                 }
             }
@@ -66,7 +68,7 @@ fun TaskListScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(tasks) { task ->
-                    TaskItem(task, onStart = { viewModel.startTask(task) })
+                    TaskItem(task, onStart = { onStartTask(task) })
                 }
             }
         }

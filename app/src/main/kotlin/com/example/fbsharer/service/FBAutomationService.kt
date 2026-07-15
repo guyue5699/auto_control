@@ -209,7 +209,7 @@ class FBAutomationService : AccessibilityService() {
                     val targetGroups = clickableNodes.filter { 
                         val txt = it.text?.toString() ?: it.contentDescription?.toString() ?: ""
                         txt != "搜索小组" && txt != "Search" && txt != "返回" && txt.isNotBlank() &&
-                        !shareToGroupTexts.contains(txt) && !shareTexts.contains(txt)
+                        !shareToGroupTexts.contains(txt) && !potentialTexts.contains(txt)
                     }
 
                     if (groupIndex >= targetGroups.size) {

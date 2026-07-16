@@ -33,19 +33,28 @@ fun AutomationBrowser(
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     databaseEnabled = true
-                    // 修正：禁用这些可能导致页面缩放异常的设置
-                    useWideViewPort = false
-                    loadWithOverviewMode = false
-                    // 允许缩放但隐藏控件
-                    setSupportZoom(true)
+                    
+                    // 极致适配：标准移动端渲染
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.NORMAL
+                    
+                    // 禁用多余的缩放行为
+                    setSupportZoom(false)
                     builtInZoomControls = false
-                    displayZoomControls = false
                     
                     userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
                 }
                 
-                // 修正：确保滚动条不占位
+                // 强制消除边距和背景影响
+                setBackgroundColor(android.graphics.Color.WHITE) // 设置为白色背景，与网页统一
+                setPadding(0, 0, 0, 0)
+                
+                // 彻底禁用滚动条占位，防止产生侧边缝隙
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 scrollBarStyle = android.view.View.SCROLLBARS_INSIDE_OVERLAY
+                overScrollMode = android.view.View.OVER_SCROLL_NEVER
                 
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {

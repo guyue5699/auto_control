@@ -1,5 +1,20 @@
 (function() {
     const TAG = "[FBAutomation]";
+    
+    // 强制修正移动端视口，解决留白问题
+    function fixViewport() {
+        let meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) {
+            meta = document.createElement('meta');
+            meta.name = 'viewport';
+            document.getElementsByTagName('head')[0].appendChild(meta);
+        }
+        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+        document.body.style.width = '100%';
+        document.documentElement.style.width = '100%';
+    }
+    fixViewport();
+
     function log(msg) {
         console.log(TAG + " " + msg);
         if (window.AndroidBridge) {
@@ -25,20 +40,45 @@
     async function startAutomation() {
         log("开始执行自动化分享脚本...");
         
-        // 1. 寻找分享按钮
-        // 注意：FB 类名混淆严重，通常通过 aria-label 或内容识别
-        const shareButtons = Array.from(document.querySelectorAll('div[role="button"], i')).filter(el => {
-            const label = el.getAttribute('aria-label') || el.innerText || "";
-            return label.includes("分享") || label.includes("Share");
-        });
+        let shareButton = null;
+        let scrollAttempts = 0;
+        const maxScrolls = 10;
 
-        if (shareButtons.length === 0) {
-            log("未发现任何分享按钮，请确保已进入个人主页并加载了帖子。");
+        while (!shareButton && scrollAttempts < maxScrolls) {
+            log(`正在寻找分享按钮 (尝试第 ${scrollAttempts + 1} 次)...`);
+            
+            // 1. 寻找分享按钮
+            const shareButtons = Array.from(document.querySelectorAll('div[role="button"], i, span')).filter(el => {
+                const label = (el.getAttribute('aria-label') || el.innerText || "").trim();
+                return label === "分享" || label === "Share" || label.includes("分享") || label.includes("Share");
+            });
+
+            if (shareButtons.length > 0) {
+                // 找到按钮了，检查它是否在视图中
+                for (let btn of shareButtons) {
+                    const rect = btn.getBoundingClientRect();
+                    if (rect.top > 0 && rect.bottom < window.innerHeight) {
+                        shareButton = btn;
+                        break;
+                    }
+                }
+            }
+
+            if (!shareButton) {
+                log("未在当前视图发现分享按钮，尝试向下滚动...");
+                window.scrollBy(0, 500);
+                scrollAttempts++;
+                await sleep(1500); // 等待滚动和加载
+            }
+        }
+
+        if (!shareButton) {
+            log("经过多次尝试，仍未发现任何分享按钮，请检查页面内容。");
             return;
         }
 
-        log(`发现 ${shareButtons.length} 个可能的分享按钮，准备处理第一个...`);
-        shareButtons[0].click();
+        log("锁定分享按钮，准备点击...");
+        shareButton.click();
         await sleep(2000);
 
         // 2. 寻找“分享到小组”选项

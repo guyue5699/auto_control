@@ -179,6 +179,20 @@ class FBAutomationService : AccessibilityService() {
             val height = if (rect.bottom > rect.top) rect.bottom - rect.top else rect.top - rect.bottom
             val screenHeight = resources.displayMetrics.heightPixels
             
+            // 过滤掉文字是 Reels / 全部 / 照片 / 签到 / 生活纪事 的误判节点
+            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+            if (text.contains("Reels", ignoreCase = true) || 
+                text.contains("照片") || 
+                text.contains("全部") ||
+                text.contains("签到") ||
+                text.contains("生活纪") ||
+                text.contains("Photos", ignoreCase = true) ||
+                text.contains("All", ignoreCase = true) ||
+                text.contains("Check in", ignoreCase = true) ||
+                text.contains("Life event", ignoreCase = true)) {
+                return@find false
+            }
+            
             // 只要高度有效且中心点在屏幕内
             val isVisible = height > 0 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100
             
@@ -227,11 +241,29 @@ class FBAutomationService : AccessibilityService() {
             // 寻找横向排列的互动条 (通常包含 3 个子按钮)
             if (node.childCount == 3) {
                 var clickableCount = 0
+                var hasTabKeywords = false
+                
                 for (i in 0 until node.childCount) {
-                    if (node.getChild(i)?.isClickable == true) clickableCount++
+                    val child = node.getChild(i)
+                    if (child?.isClickable == true) clickableCount++
+                    
+                    // 检查是否是主页的 Tab 栏（全部 / 照片 / Reels / 签到 / 生活纪事）
+                    val text = child?.text?.toString() ?: child?.contentDescription?.toString() ?: ""
+                    if (text.contains("Reels", ignoreCase = true) || 
+                        text.contains("照片") || 
+                        text.contains("全部") ||
+                        text.contains("签到") ||
+                        text.contains("生活纪") ||
+                        text.contains("Photos", ignoreCase = true) ||
+                        text.contains("All", ignoreCase = true) ||
+                        text.contains("Check in", ignoreCase = true) ||
+                        text.contains("Life event", ignoreCase = true)) {
+                        hasTabKeywords = true
+                    }
                 }
                 
-                if (clickableCount == 3) {
+                // 必须是 3 个按钮，且不能包含 Tab 栏的特征文字
+                if (clickableCount == 3 && !hasTabKeywords) {
                     // 锁定第三个按钮作为分享按钮
                     node.getChild(2)?.let { result.add(it) }
                 }

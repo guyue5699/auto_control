@@ -92,41 +92,38 @@ class FBAutomationService : AccessibilityService() {
         currentTask = task
         currentGroupIndex = 0
         currentState = State.NAVIGATING
-        Log.d(TAG, "🚀 开始自动化流程: ${task.targetUrl}")
-        
-        // 强制锁定 Chrome 的各种可能包名
-        val chromePackages = listOf("com.android.chrome", "com.google.android.apps.chrome")
+        Log.d(TAG, "🚀 开始启动流程...")
+
         val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        var launched = false
-        for (pkg in chromePackages) {
-            try {
-                intent.setPackage(pkg)
-                startActivity(intent)
-                Log.i(TAG, "✅ 成功启动 Chrome: $pkg")
-                launched = true
-                break
-            } catch (e: Exception) {
-                Log.w(TAG, "无法使用包名 $pkg 启动")
-            }
+        // 深度扫描已安装的浏览器和 Google 全家桶应用
+        val pm = packageManager
+        val installedApps = pm.getInstalledApplications(0)
+        
+        // 按照优先级排序寻找目标包名
+        val targetPkg = installedApps.find { it.packageName == "com.android.chrome" }?.packageName
+            ?: installedApps.find { it.packageName == "com.google.android.googlequicksearchbox" }?.packageName // 也就是图标显示为 "Google" 的应用
+            ?: installedApps.find { it.packageName.contains("chrome", ignoreCase = true) }?.packageName
+            ?: installedApps.find { it.packageName.contains("browser", ignoreCase = true) }?.packageName
+
+        if (targetPkg != null) {
+            Log.i(TAG, "✅ 找到目标应用包名: $targetPkg")
+            intent.setPackage(targetPkg)
+        } else {
+            Log.w(TAG, "⚠️ 未发现指定应用，将使用系统默认分发")
         }
 
-        if (!launched) {
-            Log.e(TAG, "❌ 未找到任何 Chrome 变体，回退至系统默认浏览器")
-            intent.setPackage(null)
-            try {
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Fatal: 无可用浏览器")
-            }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 启动浏览器失败: ${e.message}")
         }
 
         scope.launch {
             delay(5000)
             currentState = State.FINDING_POST
-            Log.d(TAG, "状态切换 -> FINDING_POST")
         }
     }
 
@@ -163,10 +160,15 @@ class FBAutomationService : AccessibilityService() {
         val validShareNode = shareNodes.find { node ->
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            // 极大放宽可见性限制：只要在屏幕范围内（考虑到状态栏和导航栏）
+            
+            // 修复 Rect 异常逻辑：如果 bottom < top，说明坐标系可能有误，取绝对高度
+            val height = if (rect.bottom > rect.top) rect.bottom - rect.top else rect.top - rect.bottom
             val screenHeight = resources.displayMetrics.heightPixels
-            val isVisible = rect.top > 100 && rect.bottom < screenHeight - 50
-            if (!isVisible) Log.v(TAG, "跳过屏幕外节点: $rect (ScreenHeight: $screenHeight)")
+            
+            // 只要高度有效且中心点在屏幕内
+            val isVisible = height > 0 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100
+            
+            if (!isVisible) Log.v(TAG, "跳过无效或屏幕外节点: $rect (Height: $height)")
             isVisible
         }
 
@@ -372,23 +374,30 @@ class FBAutomationService : AccessibilityService() {
         val width = displayMetrics.widthPixels
         val height = displayMetrics.heightPixels
 
-        Log.d(TAG, "执行物理模拟滑动: [${width/2}, ${height*0.8}] -> [${width/2}, ${height*0.3}]")
+        Log.i(TAG, "正在执行强制滚动手势...")
 
         val path = Path()
-        path.moveTo(width / 2f, height * 0.8f)
-        path.lineTo(width / 2f, height * 0.3f) // 滑动距离稍微拉长一点
+        // 从屏幕最底部开始滑，避开中间可能存在的浮窗或固定容器
+        path.moveTo(width / 2f, height * 0.9f)
+        path.lineTo(width / 2f, height * 0.1f)
 
         val gestureBuilder = GestureDescription.Builder()
-        // 增加滑动持续时间到 800ms，确保系统能识别为有效滑动
-        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 800))
-        dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
+        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 600))
+        
+        val result = dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                Log.d(TAG, "手势滑动完成")
+                Log.d(TAG, "手势下发完成")
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                Log.e(TAG, "手势滑动被系统取消，请检查是否有悬浮窗遮挡")
+                Log.e(TAG, "手势被系统拦截，请检查是否有覆盖层")
             }
         }, null)
+
+        if (!result) {
+            Log.e(TAG, "手势启动失败，切换系统底层滚动指令...")
+            // Fallback: 使用系统自带的滚动能力作为兜底
+            performGlobalAction(AccessibilityService.GLOBAL_ACTION_SCROLL_FORWARD)
+        }
     }
 
     override fun onInterrupt() {

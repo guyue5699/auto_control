@@ -8,6 +8,7 @@
 
     <queries>
         <package android:name="com.android.chrome" />
+        <package android:name="com.google.android.googlequicksearchbox" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />

@@ -29,13 +29,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startTask(task: PostTask) {
         viewModelScope.launch {
-            val service = com.example.fbsharer.service.FBAutomationService.instance
-            if (service == null) {
-                Toast.makeText(getApplication(), "无障碍服务未启动，请先开启权限", Toast.LENGTH_LONG).show()
-                return@launch
-            }
             dao.updateStatus(task.id, TaskStatus.RUNNING)
-            service.startAutomation(task)
+            // 现在通过 TaskExecutionScreen 中的 WebView 执行，不再通过 Service
         }
     }
 

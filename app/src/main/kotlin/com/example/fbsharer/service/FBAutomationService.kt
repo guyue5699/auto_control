@@ -1,7 +1,9 @@
 package com.example.fbsharer.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
@@ -101,7 +103,7 @@ class FBAutomationService : AccessibilityService() {
         } else {
             // 尝试滚动
             Log.d(TAG, "未找到分享按钮，尝试向下滚动")
-            performGlobalAction(GLOBAL_ACTION_SCROLL_FORWARD)
+            swipeUp()
         }
     }
 
@@ -156,7 +158,7 @@ class FBAutomationService : AccessibilityService() {
                 currentState = State.POSTING
             } else {
                 Log.d(TAG, "未找到小组: $targetGroupName，尝试滚动")
-                performGlobalAction(GLOBAL_ACTION_SCROLL_FORWARD)
+                swipeUp()
             }
         } else {
             // “全自动遍历”模式
@@ -167,7 +169,7 @@ class FBAutomationService : AccessibilityService() {
             
             if (currentGroupIndex >= clickableNodesWithText.size) {
                 Log.d(TAG, "当前页面的小组已遍历完，尝试滚动寻找更多")
-                performGlobalAction(GLOBAL_ACTION_SCROLL_FORWARD)
+                swipeUp()
                 // 如果滚动后依然没有新节点，则视为结束
                 return
             }
@@ -206,7 +208,7 @@ class FBAutomationService : AccessibilityService() {
         currentGroupIndex = 0
         currentState = State.FINDING_POST
         // 自动向下滚动寻找下一个帖子
-        performGlobalAction(GLOBAL_ACTION_SCROLL_FORWARD)
+        swipeUp()
     }
 
     private fun findAndClickFinalPost() {
@@ -243,6 +245,20 @@ class FBAutomationService : AccessibilityService() {
             target = target.parent
         }
         target?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    private fun swipeUp() {
+        val displayMetrics = resources.displayMetrics
+        val width = displayMetrics.widthPixels
+        val height = displayMetrics.heightPixels
+
+        val path = Path()
+        path.moveTo(width / 2f, height * 0.8f)
+        path.lineTo(width / 2f, height * 0.2f)
+
+        val gestureBuilder = GestureDescription.Builder()
+        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 500))
+        dispatchGesture(gestureBuilder.build(), null, null)
     }
 
     override fun onInterrupt() {

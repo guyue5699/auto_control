@@ -67,15 +67,30 @@ class FBAutomationService : AccessibilityService() {
         currentState = State.NAVIGATING
         Log.d(TAG, "开始任务: ${task.targetUrl}")
         
-        // 启动 Chrome
-        val intent = Intent(Intent.ACTION_VIEW)
-        intent.data = android.net.Uri.parse(task.targetUrl)
-        intent.setPackage("com.android.chrome")
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+        // 启动浏览器逻辑
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            // 优先尝试使用 Chrome
+            intent.setPackage("com.android.chrome")
+            startActivity(intent)
+            Log.d(TAG, "成功启动 Chrome")
+        } catch (e: Exception) {
+            Log.e(TAG, "未找到 Chrome，尝试使用默认浏览器: ${e.message}")
+            try {
+                intent.setPackage(null) // 清除包名，使用系统默认分发
+                startActivity(intent)
+                Log.d(TAG, "成功启动默认浏览器")
+            } catch (e2: Exception) {
+                Log.e(TAG, "无可用的浏览器: ${e2.message}")
+                // 可以在这里发一个广播或回调通知 UI 弹出 Toast
+            }
+        }
 
         scope.launch {
-            delay(5000) // 等待 Chrome 启动和页面加载
+            delay(5000) // 等待浏览器启动和页面加载
             currentState = State.FINDING_POST
         }
     }

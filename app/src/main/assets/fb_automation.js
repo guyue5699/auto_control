@@ -40,9 +40,14 @@
                 box-sizing: border-box !important;
             }
 
-            /* 4. 隐藏干扰元素 */
-            div[role="banner"], ._55wr, ._7om2, #header, #footer, ._6084 { 
+            /* 4. 彻底隐藏干扰元素和“下载 App”横幅 */
+            div[role="banner"], ._55wr, ._7om2, #header, #footer, ._6084, 
+            .smart-banner, .fb-smart-banner, [aria-label*="使用应用"], [aria-label*="Use App"],
+            div[class*="banner"] { 
                 display: none !important; 
+                visibility: hidden !important;
+                height: 0 !important;
+                pointer-events: none !important;
             }
 
             /* 5. 修复 FB 移动版的 flex 布局 */
@@ -205,25 +210,54 @@
 
         // 寻找“分享到小组”
         log("🔎 寻找转发目标菜单...");
-        const targetTexts = ["分享到小组", "share to a group", "转发到小组", "在小组中分享", "share in a group"];
+        // 增加更广泛的关键字和深度搜索
+        const targetTexts = [
+            "分享到小组", "share to a group", "转发到小组", "在小组中分享", "share in a group",
+            "分享到群组", "share to group", "发送到小组"
+        ];
         
         let menuClicked = false;
-        const allSpans = Array.from(document.querySelectorAll('span, div, a, b'));
-        for (let el of allSpans) {
-            const text = (el.innerText || "").toLowerCase();
-            if (targetTexts.some(kw => text.includes(kw))) {
-                log("✅ 找到菜单项: " + text);
-                el.click();
-                menuClicked = true;
-                break;
+        
+        // 循环多次尝试，因为菜单弹出可能有动画延迟
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const allElements = Array.from(document.querySelectorAll('span, div, a, b, i, p'));
+            for (let el of allElements) {
+                const text = (el.innerText || el.textContent || "").toLowerCase().trim();
+                const aria = (el.getAttribute('aria-label') || "").toLowerCase();
+                
+                if (targetTexts.some(kw => text === kw || text.includes(kw) || aria.includes(kw))) {
+                    log("✅ 命中菜单项: " + text);
+                    // 确保元素可见且可点击
+                    const rect = el.getBoundingClientRect();
+                    if (rect.height > 0) {
+                        el.click();
+                        menuClicked = true;
+                        break;
+                    }
+                }
             }
+            if (menuClicked) break;
+            log(`等待菜单弹出 (第 ${attempt + 1} 次尝试)...`);
+            await sleep(1000);
         }
 
         if (menuClicked) {
             log("🎉 已进入小组选择界面，请选择目标小组。");
             await sleep(3000);
         } else {
-            log("⚠️ 未找到转发菜单，可能菜单未弹出或 UI 发生变化。");
+            log("⚠️ 未找到转发菜单。尝试寻找通用的‘小组’图标或按钮...");
+            // 最后的兜底：寻找带有 group 关键字的 role="button"
+            const groupBtn = Array.from(document.querySelectorAll('[role="button"]')).find(el => {
+                const attr = (el.innerText + el.getAttribute('aria-label')).toLowerCase();
+                return attr.includes("group") || attr.includes("小组");
+            });
+            if (groupBtn) {
+                log("✅ 发现疑似小组按钮，尝试点击...");
+                groupBtn.click();
+                menuClicked = true;
+            } else {
+                log("❌ 最终识别失败，请检查 Facebook 菜单是否已弹出。");
+            }
         }
 
         if (window.AndroidBridge) {

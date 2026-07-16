@@ -279,15 +279,37 @@ class FBAutomationService : AccessibilityService() {
         val rootNode = rootInActiveWindow ?: return
         val groupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
         
+        // 1. 尝试系统 API 按文本查找
         for (keyword in groupKeywords) {
             val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
             if (nodes.isNotEmpty()) {
-                Log.d(TAG, "找到‘分享到小组’，点击")
+                Log.d(TAG, "通过系统文本查找找到‘分享到小组’，点击")
                 performClick(nodes[0])
                 currentState = State.SELECTING_GROUP
                 return
             }
         }
+
+        // 2. 尝试深度遍历查找 (处理 contentDescription 或嵌套结构)
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(rootNode)
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
+            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+            
+            if (groupKeywords.any { text.contains(it, ignoreCase = true) }) {
+                Log.d(TAG, "通过深度遍历找到‘分享到小组’，点击")
+                performClick(node)
+                currentState = State.SELECTING_GROUP
+                return
+            }
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
+        }
+        
+        Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
     }
 
     private fun findAndClickTargetGroup() {

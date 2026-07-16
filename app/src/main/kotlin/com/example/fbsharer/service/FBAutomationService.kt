@@ -430,7 +430,37 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun performClick(node: AccessibilityNodeInfo) {
-        var target = node
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        
+        // 修复 Rect 异常：Webview 中有时 bottom 和 top 颠倒
+        val top = Math.min(rect.top, rect.bottom)
+        val bottom = Math.max(rect.top, rect.bottom)
+        val left = Math.min(rect.left, rect.right)
+        val right = Math.max(rect.left, rect.right)
+        
+        val x = left + (right - left) / 2f
+        val y = top + (bottom - top) / 2f
+
+        if (x > 0 && y > 0) {
+            Log.d(TAG, "执行物理坐标点击: ($x, $y) - Text: ${node.text}")
+            val path = Path().apply { moveTo(x, y) }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+                .build()
+            
+            val result = dispatchGesture(gesture, null, null)
+            if (!result) {
+                Log.w(TAG, "物理坐标点击失败，降级使用节点 ACTION_CLICK")
+                fallbackNodeClick(node)
+            }
+        } else {
+            fallbackNodeClick(node)
+        }
+    }
+
+    private fun fallbackNodeClick(node: AccessibilityNodeInfo) {
+        var target: AccessibilityNodeInfo? = node
         while (target != null && !target.isClickable) {
             target = target.parent
         }

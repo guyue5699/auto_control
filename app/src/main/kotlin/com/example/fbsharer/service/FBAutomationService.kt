@@ -155,8 +155,10 @@ class FBAutomationService : AccessibilityService() {
         val validShareNode = shareNodes.find { node ->
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            val isVisible = rect.top > 250 && rect.bottom < resources.displayMetrics.heightPixels - 200
-            if (!isVisible) Log.v(TAG, "跳过不可见节点: $rect")
+            // 极大放宽可见性限制：只要在屏幕范围内（考虑到状态栏和导航栏）
+            val screenHeight = resources.displayMetrics.heightPixels
+            val isVisible = rect.top > 100 && rect.bottom < screenHeight - 50
+            if (!isVisible) Log.v(TAG, "跳过屏幕外节点: $rect (ScreenHeight: $screenHeight)")
             isVisible
         }
 
@@ -359,13 +361,23 @@ class FBAutomationService : AccessibilityService() {
         val width = displayMetrics.widthPixels
         val height = displayMetrics.heightPixels
 
+        Log.d(TAG, "执行物理模拟滑动: [${width/2}, ${height*0.8}] -> [${width/2}, ${height*0.3}]")
+
         val path = Path()
         path.moveTo(width / 2f, height * 0.8f)
-        path.lineTo(width / 2f, height * 0.2f)
+        path.lineTo(width / 2f, height * 0.3f) // 滑动距离稍微拉长一点
 
         val gestureBuilder = GestureDescription.Builder()
-        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 500))
-        dispatchGesture(gestureBuilder.build(), null, null)
+        // 增加滑动持续时间到 800ms，确保系统能识别为有效滑动
+        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 800))
+        dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                Log.d(TAG, "手势滑动完成")
+            }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                Log.e(TAG, "手势滑动被系统取消，请检查是否有悬浮窗遮挡")
+            }
+        }, null)
     }
 
     override fun onInterrupt() {

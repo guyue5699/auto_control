@@ -36,10 +36,10 @@ fun TaskExecutionScreen(
             }
         )
         
-        // 内嵌浏览器预览 (占比 40%)
+        // 内嵌浏览器预览 (占比 70%)
         Box(modifier = Modifier
             .fillMaxWidth()
-            .weight(0.4f)
+            .weight(0.7f)
             .background(Color.Black)
         ) {
             AutomationBrowser(
@@ -57,10 +57,10 @@ fun TaskExecutionScreen(
             )
         }
         
-        // 实时控制台日志 (占比 60%)
+        // 实时控制台日志 (占比 30%)
         Column(modifier = Modifier
             .fillMaxWidth()
-            .weight(0.6f)
+            .weight(0.3f)
             .background(Color(0xFF1E1E1E))
             .padding(8.dp)
         ) {
@@ -76,10 +76,14 @@ fun TaskExecutionScreen(
                 items(logs.reversed()) { log ->
                     Text(
                         text = "> $log",
-                        color = if (log.startsWith("ERROR")) Color.Red else Color.Green,
-                        fontSize = 13.sp,
+                        color = when {
+                            log.contains("ERROR") -> Color.Red
+                            log.contains("注入") || log.contains("加载") -> Color.Yellow
+                            else -> Color.Green
+                        },
+                        fontSize = 11.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        modifier = Modifier.padding(vertical = 2.dp)
+                        modifier = Modifier.padding(vertical = 1.dp)
                     )
                 }
             }

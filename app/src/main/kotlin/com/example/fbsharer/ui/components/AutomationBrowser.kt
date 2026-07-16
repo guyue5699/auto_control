@@ -42,6 +42,15 @@ fun AutomationBrowser(
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         onLog("页面加载完成: $url")
+                        // 尝试自动注入脚本
+                        try {
+                            val script = context.assets.open("fb_automation.js").bufferedReader().use { it.readText() }
+                            view?.evaluateJavascript(script) { result ->
+                                onLog("脚本注入状态: $result")
+                            }
+                        } catch (e: Exception) {
+                            onLog("ERROR: 脚本注入失败: ${e.message}")
+                        }
                     }
                 }
                 

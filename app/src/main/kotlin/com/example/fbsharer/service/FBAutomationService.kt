@@ -94,29 +94,33 @@ class FBAutomationService : AccessibilityService() {
         currentState = State.NAVIGATING
         Log.d(TAG, "🚀 开始启动流程...")
 
-        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
+        val baseIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        // 深度扫描已安装的浏览器和 Google 全家桶应用
         val pm = packageManager
-        val installedApps = pm.getInstalledApplications(0)
-        
-        // 按照优先级排序寻找目标包名
-        val targetPkg = installedApps.find { it.packageName == "com.android.chrome" }?.packageName
-            ?: installedApps.find { it.packageName == "com.google.android.googlequicksearchbox" }?.packageName // 也就是图标显示为 "Google" 的应用
-            ?: installedApps.find { it.packageName.contains("chrome", ignoreCase = true) }?.packageName
-            ?: installedApps.find { it.packageName.contains("browser", ignoreCase = true) }?.packageName
-
-        if (targetPkg != null) {
-            Log.i(TAG, "✅ 找到目标应用包名: $targetPkg")
-            intent.setPackage(targetPkg)
+        val preferredPackages = listOf(
+            "com.android.chrome",
+            "com.google.android.apps.chrome"
+        )
+        val discoveredBrowserPackages = pm.queryIntentActivities(baseIntent, 0)
+            .mapNotNull { it.activityInfo?.packageName }
+            .filterNot { it == "com.google.android.googlequicksearchbox" }
+            .distinct()
+        val targetPkg = (preferredPackages + discoveredBrowserPackages).firstOrNull { packageName ->
+            Intent(baseIntent).setPackage(packageName).resolveActivity(pm) != null
+        }
+        val launchIntent = if (targetPkg != null) {
+            Log.i(TAG, "✅ 找到可用浏览器包名: $targetPkg")
+            Intent(baseIntent).setPackage(targetPkg)
         } else {
-            Log.w(TAG, "⚠️ 未发现指定应用，将使用系统默认分发")
+            Log.w(TAG, "⚠️ 未锁定到 Chrome，将尝试系统默认浏览器")
+            baseIntent
         }
 
         try {
-            startActivity(intent)
+            startActivity(launchIntent)
         } catch (e: Exception) {
             Log.e(TAG, "❌ 启动浏览器失败: ${e.message}")
         }

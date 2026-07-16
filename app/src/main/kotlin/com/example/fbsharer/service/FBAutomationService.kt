@@ -395,8 +395,11 @@ class FBAutomationService : AccessibilityService() {
 
         if (!result) {
             Log.e(TAG, "手势启动失败，切换系统底层滚动指令...")
-            // Fallback: 使用系统自带的滚动能力作为兜底
-            performGlobalAction(AccessibilityService.GLOBAL_ACTION_SCROLL_FORWARD)
+            // Fallback: 尝试对当前根节点执行前向滚动动作
+            val scrollPerformed = rootInActiveWindow?.performAction(
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            ) == true
+            Log.d(TAG, "节点前向滚动结果: $scrollPerformed")
         }
     }
 

@@ -14,14 +14,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.fbsharer.data.PostTask
 import com.example.fbsharer.data.TaskStatus
 import com.example.fbsharer.ui.viewmodel.TaskViewModel
 
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
-import android.provider.Settings
-import com.example.fbsharer.utils.PermissionUtils
+import com.example.fbsharer.data.PostTask
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,7 +30,6 @@ fun TaskListScreen(
 ) {
     val tasks by viewModel.allTasks.collectAsState(initial = emptyList())
     val context = LocalContext.current
-    val isPermissionEnabled = PermissionUtils.isAccessibilityServiceEnabled(context)
 
     Scaffold(
         topBar = {
@@ -45,23 +42,6 @@ fun TaskListScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            // 无障碍权限提示（在 WebView 方案中不再是强制的，但保留作为备选）
-            if (!isPermissionEnabled) {
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    }
-                ) {
-                    Text(
-                        text = "提示：新版已启用内嵌浏览器分享，如需使用原版自动化请开启无障碍权限",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                }
-            }
-
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),

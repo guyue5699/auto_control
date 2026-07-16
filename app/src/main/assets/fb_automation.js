@@ -87,26 +87,11 @@
     async function findShareButton() {
         log("开始深度扫描分享按钮...");
         
-        // 方案 A: 寻找包含特定文本或属性的按钮 (支持多国语言)
+        // 排除项：避免点到“创建帖子”、“发表新鲜事”等干扰按钮
+        const blacklist = ["新鲜事", "mind", "post", "发布", "撰写", "write", "status", "更新状态"];
         const shareKeywords = ["分享", "share", "转发", "forward", "repost"];
-        const allButtons = Array.from(document.querySelectorAll('div[role="button"], a[role="button"], span[role="button"]'));
-        
-        for (let btn of allButtons) {
-            const text = (btn.innerText || "").toLowerCase();
-            const aria = (btn.getAttribute('aria-label') || "").toLowerCase();
-            const title = (btn.getAttribute('title') || "").toLowerCase();
-            
-            if (shareKeywords.some(kw => text.includes(kw) || aria.includes(kw) || title.includes(kw))) {
-                const rect = btn.getBoundingClientRect();
-                // 只要在文档流中且高度不为0即可，后续会自动滚动到中心
-                if (rect.height > 0) {
-                    log("方案 A 命中: " + (text || aria || "icon-only"));
-                    return btn;
-                }
-            }
-        }
 
-        // 方案 B: 结构化定位（寻找互动的三个按钮组）
+        // 优先方案：结构化定位（寻找互动的三个按钮组）
         // 针对没有文字，只有图标的情况。寻找包含 3 个子按钮的横向容器
         const actionBars = Array.from(document.querySelectorAll('div')).filter(el => {
             const childButtons = el.querySelectorAll('div[role="button"], a[role="button"]');
@@ -120,23 +105,40 @@
                 // 最后一个或倒数第二个通常是分享
                 const shareBtn = buttons[buttons.length - 1]; 
                 if (shareBtn) {
+                    const text = (shareBtn.innerText || "").toLowerCase();
+                    const aria = (shareBtn.getAttribute('aria-label') || "").toLowerCase();
+                    
+                    // 检查是否在黑名单中
+                    const isInvalid = blacklist.some(kw => text.includes(kw) || aria.includes(kw));
+                    if (isInvalid) continue;
+
                     const rect = shareBtn.getBoundingClientRect();
-                    if (rect.height > 0) {
-                        log("方案 B 命中：锁定互动条末尾按钮");
+                    if (rect.height > 0 && rect.top > 100) { // 避开顶部发帖区
+                        log("方案：锁定互动条末尾按钮");
                         return shareBtn;
                     }
                 }
             }
         }
 
-        // 方案 C: 针对混淆后的特殊类名 (FB 常用图标类名特征)
-        const possibleIcons = document.querySelectorAll('i[class*="sp_"], i[class*="sx_"], i[style*="background-image"]');
-        for (let icon of possibleIcons) {
-            // 向上寻找最近的按钮容器
-            const btn = icon.closest('div[role="button"], a[role="button"]');
-            if (btn) {
-                const aria = (btn.getAttribute('aria-label') || "").toLowerCase();
-                if (aria.includes("分享") || aria.includes("share")) return btn;
+        // 备选方案：寻找包含特定文本或属性的按钮
+        const allButtons = Array.from(document.querySelectorAll('div[role="button"], a[role="button"], span[role="button"]'));
+        for (let btn of allButtons) {
+            const text = (btn.innerText || "").toLowerCase();
+            const aria = (btn.getAttribute('aria-label') || "").toLowerCase();
+            const title = (btn.getAttribute('title') || "").toLowerCase();
+            
+            // 必须包含分享关键字，且不能包含黑名单关键字
+            const hasShareKw = shareKeywords.some(kw => text.includes(kw) || aria.includes(kw) || title.includes(kw));
+            const hasBlacklistKw = blacklist.some(kw => text.includes(kw) || aria.includes(kw) || title.includes(kw));
+            
+            if (hasShareKw && !hasBlacklistKw) {
+                const rect = btn.getBoundingClientRect();
+                // 避开屏幕顶部的发帖框（通常在 y < 150 的位置）
+                if (rect.height > 0 && rect.top > 150) {
+                    log("方案 A 命中: " + (text || aria || "icon-only"));
+                    return btn;
+                }
             }
         }
 

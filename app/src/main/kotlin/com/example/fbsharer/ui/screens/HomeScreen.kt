@@ -20,17 +20,19 @@ import com.example.fbsharer.model.AutomationFeature
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onNavigateToFeature: (String) -> Unit
+    onNavigateToFeature: (String) -> Unit,
+    viewModel: com.example.fbsharer.ui.viewmodel.TaskViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val context = LocalContext.current
+    val isPermissionEnabled = com.example.fbsharer.utils.PermissionUtils.isAccessibilityServiceEnabled(context)
 
     val features = listOf(
         AutomationFeature(
             id = "facebook",
             title = "Facebook 自动分享",
             icon = Icons.Default.Share,
-            route = "facebook_task_list",
-            description = "内嵌 WebView + JS 注入实现自动分享"
+            route = "facebook_direct",
+            description = "一键自动分享个人帖子到所有小组"
         ),
         AutomationFeature(
             id = "tiktok",
@@ -48,6 +50,23 @@ fun HomeScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
+            if (!isPermissionEnabled) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }
+                ) {
+                    Text(
+                        text = "请点击开启无障碍服务以开启自动化群控功能",
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 contentPadding = PaddingValues(16.dp),
@@ -58,7 +77,11 @@ fun HomeScreen(
                 items(features) { feature ->
                     FeatureCard(feature, onClick = {
                         if (feature.isEnabled) {
-                            onNavigateToFeature(feature.route)
+                            if (feature.id == "facebook") {
+                                viewModel.startDirectAutomation()
+                            } else {
+                                onNavigateToFeature(feature.route)
+                            }
                         }
                     })
                 }

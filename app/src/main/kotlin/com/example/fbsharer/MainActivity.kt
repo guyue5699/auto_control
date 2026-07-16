@@ -14,10 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
-import com.example.fbsharer.ui.screens.CreateTaskScreen
 import com.example.fbsharer.ui.screens.HomeScreen
-import com.example.fbsharer.ui.screens.TaskListScreen
-import com.example.fbsharer.ui.screens.execution.TaskExecutionScreen
 import com.example.fbsharer.data.PostTask
 
 class MainActivity : ComponentActivity() {
@@ -47,29 +44,6 @@ fun AppNavigation() {
         composable("home") {
             HomeScreen(
                 onNavigateToFeature = { route -> navController.navigate(route) }
-            )
-        }
-        composable("facebook_task_list") {
-            TaskListScreen(
-                onNavigateToCreateTask = { navController.navigate("facebook_create_task") },
-                onStartTask = { task -> 
-                    navController.navigate("facebook_execute_task/${task.id}")
-                }
-            )
-        }
-        composable(
-            route = "facebook_execute_task/{taskId}",
-            arguments = listOf(navArgument("taskId") { type = NavType.LongType })
-        ) { backStackEntry ->
-            val taskId = backStackEntry.arguments?.getLong("taskId") ?: 0L
-            TaskExecutionScreen(
-                task = PostTask(id = taskId, text = "", targetUrl = "", imagePaths = "", groupNames = ""),
-                onClose = { navController.popBackStack() }
-            )
-        }
-        composable("facebook_create_task") {
-            CreateTaskScreen(
-                onBack = { navController.popBackStack() }
             )
         }
     }

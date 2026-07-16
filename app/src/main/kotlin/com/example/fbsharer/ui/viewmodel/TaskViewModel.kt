@@ -27,10 +27,34 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun startDirectAutomation() {
+        viewModelScope.launch {
+            val service = com.example.fbsharer.service.FBAutomationService.instance
+            if (service == null) {
+                Toast.makeText(getApplication(), "无障碍服务未启动，请先开启权限", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            
+            // 构造默认任务：跳转到个人主页，不指定群组（表示遍历所有群组）
+            val directTask = PostTask(
+                text = "",
+                targetUrl = "https://m.facebook.com/profile.php",
+                imagePaths = "",
+                groupNames = "" 
+            )
+            service.startAutomation(directTask)
+        }
+    }
+
     fun startTask(task: PostTask) {
         viewModelScope.launch {
+            val service = com.example.fbsharer.service.FBAutomationService.instance
+            if (service == null) {
+                Toast.makeText(getApplication(), "无障碍服务未启动，请先开启权限", Toast.LENGTH_LONG).show()
+                return@launch
+            }
             dao.updateStatus(task.id, TaskStatus.RUNNING)
-            // 现在通过 TaskExecutionScreen 中的 WebView 执行，不再通过 Service
+            service.startAutomation(task)
         }
     }
 

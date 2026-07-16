@@ -88,6 +88,47 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    // 增强型点击函数：模拟完整的触摸/鼠标事件流
+    async function robustClick(el) {
+        if (!el) return false;
+        
+        // 如果元素本身不是按钮，尝试寻找最近的可点击祖先
+        const clickable = el.closest('div[role="button"], a[role="button"], button') || el;
+        
+        const coords = clickable.getBoundingClientRect();
+        const x = coords.left + coords.width / 2;
+        const y = coords.top + coords.height / 2;
+
+        log(`执行工业级模拟点击: [${Math.round(x)}, ${Math.round(y)}]`);
+
+        const eventOptions = {
+            view: window,
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y
+        };
+
+        try {
+            // 1. 触发 Touch 系列事件 (移动端优先)
+            clickable.dispatchEvent(new TouchEvent('touchstart', eventOptions));
+            clickable.dispatchEvent(new TouchEvent('touchend', eventOptions));
+            
+            // 2. 触发 Mouse 系列事件
+            clickable.dispatchEvent(new MouseEvent('mousedown', eventOptions));
+            clickable.dispatchEvent(new MouseEvent('mouseup', eventOptions));
+            clickable.dispatchEvent(new MouseEvent('click', eventOptions));
+            
+            // 3. 原生 click() 兜底
+            clickable.click();
+            return true;
+        } catch (e) {
+            log("模拟点击异常: " + e.message);
+            clickable.click();
+            return true;
+        }
+    }
+
     // 寻找分享按钮的核心逻辑
     async function findShareButton() {
         log("开始深度扫描分享按钮...");
@@ -181,30 +222,10 @@
 
         log("🎯 锁定目标！将其滚动至视图中心...");
         shareButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await sleep(1000);
+        await sleep(1500);
 
         log("🖱️ 执行物理模拟点击...");
-        // 兼容性处理：优先使用 dispatchEvent
-        try {
-            const coords = shareButton.getBoundingClientRect();
-            const x = coords.left + coords.width / 2;
-            const y = coords.top + coords.height / 2;
-            
-            // 触发点击
-            shareButton.click();
-            
-            // 兜底方案：派发触摸事件
-            const touchEvent = new MouseEvent('click', {
-                view: window,
-                bubbles: true,
-                cancelable: true,
-                clientX: x,
-                clientY: y
-            });
-            shareButton.dispatchEvent(touchEvent);
-        } catch (e) {
-            shareButton.click();
-        }
+        await robustClick(shareButton);
         
         await sleep(2500);
 
@@ -230,7 +251,7 @@
                     // 确保元素可见且可点击
                     const rect = el.getBoundingClientRect();
                     if (rect.height > 0) {
-                        el.click();
+                        await robustClick(el);
                         menuClicked = true;
                         break;
                     }
@@ -253,7 +274,7 @@
             });
             if (groupBtn) {
                 log("✅ 发现疑似小组按钮，尝试点击...");
-                groupBtn.click();
+                await robustClick(groupBtn);
                 menuClicked = true;
             } else {
                 log("❌ 最终识别失败，请检查 Facebook 菜单是否已弹出。");

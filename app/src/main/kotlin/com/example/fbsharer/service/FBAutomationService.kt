@@ -92,6 +92,7 @@ class FBAutomationService : AccessibilityService() {
         currentTask = task
         currentGroupIndex = 0
         currentState = State.NAVIGATING
+        lastScrollTime = 0L
         Log.d(TAG, "🚀 开始启动流程...")
 
         val baseIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
@@ -128,13 +129,22 @@ class FBAutomationService : AccessibilityService() {
         scope.launch {
             delay(5000)
             currentState = State.FINDING_POST
+            Log.d(TAG, "✅ 已进入帖子扫描阶段，立即开始寻找分享按钮")
+            runCurrentStateLogic()
         }
     }
 
     private fun findAndClickShareButton() {
         val rootNode = rootInActiveWindow
         if (rootNode == null) {
-            Log.w(TAG, "无法获取当前窗口根节点，等待中...")
+            Log.w(TAG, "无法获取当前窗口根节点，尝试主动滑动触发页面刷新")
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastScrollTime > 2000) {
+                scope.launch {
+                    swipeUp()
+                    lastScrollTime = System.currentTimeMillis()
+                }
+            }
             return
         }
         
@@ -391,6 +401,13 @@ class FBAutomationService : AccessibilityService() {
         val result = dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 Log.d(TAG, "手势下发完成")
+                if (currentState == State.FINDING_POST) {
+                    scope.launch {
+                        delay(1200)
+                        Log.d(TAG, "滚动完成，重新扫描分享按钮")
+                        runCurrentStateLogic()
+                    }
+                }
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 Log.e(TAG, "手势被系统拦截，请检查是否有覆盖层")
@@ -404,6 +421,13 @@ class FBAutomationService : AccessibilityService() {
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
             ) == true
             Log.d(TAG, "节点前向滚动结果: $scrollPerformed")
+            if (scrollPerformed && currentState == State.FINDING_POST) {
+                scope.launch {
+                    delay(1200)
+                    Log.d(TAG, "节点滚动完成，重新扫描分享按钮")
+                    runCurrentStateLogic()
+                }
+            }
         }
     }
 

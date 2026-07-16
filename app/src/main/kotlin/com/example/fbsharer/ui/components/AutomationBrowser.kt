@@ -36,12 +36,12 @@ fun AutomationBrowser(
                     
                     // 极致适配：标准移动端渲染
                     useWideViewPort = true
-                    loadWithOverviewMode = true
-                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.NORMAL
+                    loadWithOverviewMode = false // 改为 false，配合 100vw
+                    layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
                     
-                    // 禁用多余的缩放行为
-                    setSupportZoom(false)
-                    builtInZoomControls = false
+                    // 允许跨域和文件访问
+                    allowFileAccess = true
+                    allowContentAccess = true
                     
                     userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
                 }
@@ -53,6 +53,7 @@ fun AutomationBrowser(
                 // 彻底禁用滚动条占位，防止产生侧边缝隙
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
+                scrollBarSize = 0
                 scrollBarStyle = android.view.View.SCROLLBARS_INSIDE_OVERLAY
                 overScrollMode = android.view.View.OVER_SCROLL_NEVER
                 

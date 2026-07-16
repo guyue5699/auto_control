@@ -1,19 +1,76 @@
 (function() {
     const TAG = "[FBAutomation]";
     
-    // 强制修正移动端视口，解决留白问题
-    function fixViewport() {
+    // 强制修正移动端布局和视口
+    function forceLayoutFix() {
+        if (document.getElementById('automation-style')) return;
+
+        const style = document.createElement('style');
+        style.id = 'automation-style';
+        style.innerHTML = `
+            /* 1. 强制根容器全屏 */
+            html, body { 
+                width: 100vw !important; 
+                min-width: 100vw !important;
+                max-width: 100vw !important;
+                overflow-x: hidden !important; 
+                margin: 0 !important; 
+                padding: 0 !important; 
+                background: #fff !important;
+                position: relative !important;
+            }
+            
+            /* 2. 强制所有疑似容器的元素宽度撑满 */
+            #root, #viewport, [id^="mount"], ._55lr, ._5qx2, ._2v9s, ._4g33, ._52we, ._4-u2, ._4-u8 { 
+                width: 100vw !important; 
+                max-width: 100vw !important;
+                min-width: 100vw !important;
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+                box-sizing: border-box !important;
+                left: 0 !important;
+                right: 0 !important;
+            }
+
+            /* 3. 移除所有可能导致右侧留白的绝对定位偏置 */
+            * {
+                max-width: 100vw !important;
+                box-sizing: border-box !important;
+            }
+
+            /* 4. 隐藏干扰元素 */
+            div[role="banner"], ._55wr, ._7om2, #header, #footer, ._6084 { 
+                display: none !important; 
+            }
+
+            /* 5. 修复 FB 移动版的 flex 布局 */
+            ._4g34 { width: auto !important; flex: 1 !important; }
+        `;
+        document.head.appendChild(style);
+        
+        // 动态强刷 viewport
         let meta = document.querySelector('meta[name="viewport"]');
         if (!meta) {
             meta = document.createElement('meta');
             meta.name = 'viewport';
-            document.getElementsByTagName('head')[0].appendChild(meta);
+            document.head.appendChild(meta);
         }
-        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-        document.body.style.width = '100%';
-        document.documentElement.style.width = '100%';
+        meta.content = 'width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no';
+        
+        log("布局强制修正已应用 (100vw 锁定)");
     }
-    fixViewport();
+
+    // 持续监控布局，防止 SPA 路由跳转后样式丢失
+    function startLayoutMonitor() {
+        forceLayoutFix();
+        const observer = new MutationObserver(() => {
+            forceLayoutFix();
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    startLayoutMonitor();
 
     function log(msg) {
         console.log(TAG + " " + msg);
@@ -26,86 +83,152 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    async function waitForElement(selector, timeout = 10000) {
-        const start = Date.now();
-        while (Date.now() - start < timeout) {
-            const el = document.querySelector(selector);
-            if (el) return el;
-            await sleep(500);
-        }
-        return null;
-    }
-
-    // 寻找分享按钮的逻辑（针对 m.facebook.com）
-    async function startAutomation() {
-        log("开始执行自动化分享脚本...");
+    // 寻找分享按钮的核心逻辑
+    async function findShareButton() {
+        log("开始深度扫描分享按钮...");
         
-        let shareButton = null;
-        let scrollAttempts = 0;
-        const maxScrolls = 10;
-
-        while (!shareButton && scrollAttempts < maxScrolls) {
-            log(`正在寻找分享按钮 (尝试第 ${scrollAttempts + 1} 次)...`);
+        // 方案 A: 寻找包含特定文本或属性的按钮 (支持多国语言)
+        const shareKeywords = ["分享", "share", "转发", "forward", "repost"];
+        const allButtons = Array.from(document.querySelectorAll('div[role="button"], a[role="button"], span[role="button"]'));
+        
+        for (let btn of allButtons) {
+            const text = (btn.innerText || "").toLowerCase();
+            const aria = (btn.getAttribute('aria-label') || "").toLowerCase();
+            const title = (btn.getAttribute('title') || "").toLowerCase();
             
-            // 1. 寻找分享按钮
-            const shareButtons = Array.from(document.querySelectorAll('div[role="button"], i, span')).filter(el => {
-                const label = (el.getAttribute('aria-label') || el.innerText || "").trim();
-                return label === "分享" || label === "Share" || label.includes("分享") || label.includes("Share");
-            });
+            if (shareKeywords.some(kw => text.includes(kw) || aria.includes(kw) || title.includes(kw))) {
+                const rect = btn.getBoundingClientRect();
+                // 只要在文档流中且高度不为0即可，后续会自动滚动到中心
+                if (rect.height > 0) {
+                    log("方案 A 命中: " + (text || aria || "icon-only"));
+                    return btn;
+                }
+            }
+        }
 
-            if (shareButtons.length > 0) {
-                // 找到按钮了，检查它是否在视图中
-                for (let btn of shareButtons) {
-                    const rect = btn.getBoundingClientRect();
-                    if (rect.top > 0 && rect.bottom < window.innerHeight) {
-                        shareButton = btn;
-                        break;
+        // 方案 B: 结构化定位（寻找互动的三个按钮组）
+        // 针对没有文字，只有图标的情况。寻找包含 3 个子按钮的横向容器
+        const actionBars = Array.from(document.querySelectorAll('div')).filter(el => {
+            const childButtons = el.querySelectorAll('div[role="button"], a[role="button"]');
+            // FB 移动版互动条通常有 3 个按钮（赞、评、转）
+            return childButtons.length >= 3 && childButtons.length <= 5; 
+        });
+
+        if (actionBars.length > 0) {
+            for (let bar of actionBars) {
+                const buttons = bar.querySelectorAll('div[role="button"], a[role="button"]');
+                // 最后一个或倒数第二个通常是分享
+                const shareBtn = buttons[buttons.length - 1]; 
+                if (shareBtn) {
+                    const rect = shareBtn.getBoundingClientRect();
+                    if (rect.height > 0) {
+                        log("方案 B 命中：锁定互动条末尾按钮");
+                        return shareBtn;
                     }
                 }
             }
+        }
+
+        // 方案 C: 针对混淆后的特殊类名 (FB 常用图标类名特征)
+        const possibleIcons = document.querySelectorAll('i[class*="sp_"], i[class*="sx_"], i[style*="background-image"]');
+        for (let icon of possibleIcons) {
+            // 向上寻找最近的按钮容器
+            const btn = icon.closest('div[role="button"], a[role="button"]');
+            if (btn) {
+                const aria = (btn.getAttribute('aria-label') || "").toLowerCase();
+                if (aria.includes("分享") || aria.includes("share")) return btn;
+            }
+        }
+
+        return null;
+    }
+
+    async function startAutomation() {
+        log("🚀 自动化引擎启动...");
+        
+        let shareButton = null;
+        let scrollAttempts = 0;
+        const maxScrolls = 15; // 增加尝试次数，适应长页面
+
+        while (!shareButton && scrollAttempts < maxScrolls) {
+            log(`全量扫描页面元素 (尝试第 ${scrollAttempts + 1}/${maxScrolls})...`);
+            
+            shareButton = await findShareButton();
 
             if (!shareButton) {
                 log("未在当前视图发现分享按钮，尝试向下滚动...");
-                window.scrollBy(0, 500);
+                // 每次滚动半屏，确保不会跳过帖子
+                window.scrollBy({
+                    top: window.innerHeight * 0.5,
+                    behavior: 'smooth'
+                });
                 scrollAttempts++;
-                await sleep(1500); // 等待滚动和加载
+                await sleep(2500); // 等待渲染
             }
         }
 
         if (!shareButton) {
-            log("经过多次尝试，仍未发现任何分享按钮，请检查页面内容。");
+            log("❌ 经过多次尝试，仍未发现任何分享按钮，请检查页面内容。");
             return;
         }
 
-        log("锁定分享按钮，准备点击...");
-        shareButton.click();
-        await sleep(2000);
+        log("🎯 锁定目标！将其滚动至视图中心...");
+        shareButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await sleep(1000);
 
-        // 2. 寻找“分享到小组”选项
-        log("寻找 '分享到小组' 选项...");
-        const menuItems = Array.from(document.querySelectorAll('span, div')).filter(el => {
-            return el.innerText && (el.innerText.includes("分享到小组") || el.innerText.includes("Share to a group"));
-        });
+        log("🖱️ 执行物理模拟点击...");
+        // 兼容性处理：优先使用 dispatchEvent
+        try {
+            const coords = shareButton.getBoundingClientRect();
+            const x = coords.left + coords.width / 2;
+            const y = coords.top + coords.height / 2;
+            
+            // 触发点击
+            shareButton.click();
+            
+            // 兜底方案：派发触摸事件
+            const touchEvent = new MouseEvent('click', {
+                view: window,
+                bubbles: true,
+                cancelable: true,
+                clientX: x,
+                clientY: y
+            });
+            shareButton.dispatchEvent(touchEvent);
+        } catch (e) {
+            shareButton.click();
+        }
+        
+        await sleep(2500);
 
-        if (menuItems.length > 0) {
-            menuItems[0].click();
+        // 寻找“分享到小组”
+        log("🔎 寻找转发目标菜单...");
+        const targetTexts = ["分享到小组", "share to a group", "转发到小组", "在小组中分享", "share in a group"];
+        
+        let menuClicked = false;
+        const allSpans = Array.from(document.querySelectorAll('span, div, a, b'));
+        for (let el of allSpans) {
+            const text = (el.innerText || "").toLowerCase();
+            if (targetTexts.some(kw => text.includes(kw))) {
+                log("✅ 找到菜单项: " + text);
+                el.click();
+                menuClicked = true;
+                break;
+            }
+        }
+
+        if (menuClicked) {
+            log("🎉 已进入小组选择界面，请选择目标小组。");
             await sleep(3000);
         } else {
-            log("未找到 '分享到小组' 菜单项。");
-            return;
+            log("⚠️ 未找到转发菜单，可能菜单未弹出或 UI 发生变化。");
         }
 
-        // 3. 遍历小组并发布 (由于页面动态加载，这里仅演示逻辑)
-        log("正在寻找可用的群组列表...");
-        // 实际开发中需要更复杂的循环逻辑来处理每一个小组
-        
-        log("脚本执行完毕。");
         if (window.AndroidBridge) {
             window.AndroidBridge.onComplete();
         }
     }
 
-    // 暴露接口给原生
     window.runFBAutomation = startAutomation;
-    log("自动化脚本已注入就绪。");
+    log("自动化引擎已就绪。");
 })();

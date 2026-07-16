@@ -1,13 +1,11 @@
 package com.example.fbsharer.ui.screens
 
 import android.content.Intent
-import android.provider.Settings
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -18,7 +16,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.fbsharer.model.AutomationFeature
-import com.example.fbsharer.utils.PermissionUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -26,7 +23,6 @@ fun HomeScreen(
     onNavigateToFeature: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val isPermissionEnabled = PermissionUtils.isAccessibilityServiceEnabled(context)
 
     val features = listOf(
         AutomationFeature(
@@ -34,7 +30,7 @@ fun HomeScreen(
             title = "Facebook 自动分享",
             icon = Icons.Default.Share,
             route = "facebook_task_list",
-            description = "控制 Chrome 自动分享帖子到群组"
+            description = "内嵌 WebView + JS 注入实现自动分享"
         ),
         AutomationFeature(
             id = "tiktok",
@@ -52,23 +48,6 @@ fun HomeScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            if (!isPermissionEnabled) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    }
-                ) {
-                    Text(
-                        text = "请点击开启无障碍服务以开启自动化群控功能",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 contentPadding = PaddingValues(16.dp),

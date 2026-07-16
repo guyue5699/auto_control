@@ -25,6 +25,7 @@ class FBAutomationService : AccessibilityService() {
     private var currentTask: PostTask? = null
     private var currentState = State.IDLE
     private var currentGroupIndex = 0
+    private var lastScrollTime = 0L
     private val scope = CoroutineScope(Dispatchers.Main)
 
     enum class State {
@@ -97,28 +98,84 @@ class FBAutomationService : AccessibilityService() {
 
     private fun findAndClickShareButton() {
         val rootNode = rootInActiveWindow ?: return
-        val shareKeywords = listOf("分享", "Share")
         
+        // 1. 尝试通过文本识别 (中/英)
+        val shareKeywords = listOf("分享", "Share", "转发")
         val shareNodes = mutableListOf<AccessibilityNodeInfo>()
         for (keyword in shareKeywords) {
             shareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(keyword))
         }
 
-        // 过滤掉顶部的“分享新鲜事”
+        // 2. 尝试通过 contentDescription (图标模式) 识别
+        if (shareNodes.isEmpty()) {
+            findNodesByDescription(rootNode, shareKeywords, shareNodes)
+        }
+
+        // 3. 尝试通过结构化特征识别 (寻找三个按钮组中的第三个)
+        if (shareNodes.isEmpty()) {
+            findShareByStructure(rootNode, shareNodes)
+        }
+
+        // 过滤并锁定目标
         val validShareNode = shareNodes.find { node ->
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            rect.top > 200 // 避开顶部区域
+            // 避开顶部区域 (200px) 和 底部下载横幅 (200px)
+            rect.top > 250 && rect.bottom < resources.displayMetrics.heightPixels - 200
         }
 
         if (validShareNode != null) {
-            Log.d(TAG, "找到分享按钮，准备点击")
+            Log.d(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
             performClick(validShareNode)
             currentState = State.OPENING_SHARE_MENU
         } else {
-            // 尝试滚动
-            Log.d(TAG, "未找到分享按钮，尝试向下滚动")
-            swipeUp()
+            // 控制滚动频率，每 2 秒滚动一次
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastScrollTime > 2000) {
+                Log.d(TAG, "未找到分享按钮，执行精准像素滚动...")
+                swipeUp()
+                lastScrollTime = currentTime
+            }
+        }
+    }
+
+    private fun findNodesByDescription(root: AccessibilityNodeInfo, keywords: List<String>, result: MutableList<AccessibilityNodeInfo>) {
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(root)
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
+            val desc = node.contentDescription?.toString() ?: ""
+            if (keywords.any { desc.contains(it, ignoreCase = true) }) {
+                result.add(node)
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
+        }
+    }
+
+    private fun findShareByStructure(root: AccessibilityNodeInfo, result: MutableList<AccessibilityNodeInfo>) {
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(root)
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
+            
+            // 寻找横向排列的互动条 (通常包含 3 个子按钮)
+            if (node.childCount == 3) {
+                var clickableCount = 0
+                for (i in 0 until node.childCount) {
+                    if (node.getChild(i)?.isClickable == true) clickableCount++
+                }
+                
+                if (clickableCount == 3) {
+                    // 锁定第三个按钮作为分享按钮
+                    node.getChild(2)?.let { result.add(it) }
+                }
+            }
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
         }
     }
 

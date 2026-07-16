@@ -26,7 +26,23 @@ class FBAutomationService : AccessibilityService() {
     private var currentState = State.IDLE
     private var currentGroupIndex = 0
     private var lastScrollTime = 0L
+    private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.Main)
+
+    // 定时检查器，防止无障碍事件不触发导致“假死”
+    private fun startHeartbeat() {
+        if (isRunning) return
+        isRunning = true
+        scope.launch {
+            while (isRunning) {
+                if (currentTask != null && currentState != State.IDLE && currentState != State.NAVIGATING) {
+                    Log.v(TAG, "心跳检查: 当前状态 $currentState")
+                    runCurrentStateLogic()
+                }
+                delay(2000) // 每 2 秒强制检查一次
+            }
+        }
+    }
 
     enum class State {
         IDLE,
@@ -41,18 +57,28 @@ class FBAutomationService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.d(TAG, "服务已连接")
+        Log.d(TAG, "✅ 服务已连接")
+        android.widget.Toast.makeText(this, "自动化服务已就绪", android.widget.Toast.LENGTH_SHORT).show()
+        startHeartbeat()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
+        isRunning = false
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (currentTask == null || currentState == State.IDLE) return
+        
+        // 响应窗口变化事件，立即执行逻辑
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || 
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            runCurrentStateLogic()
+        }
+    }
 
-        // 核心自动化逻辑
+    private fun runCurrentStateLogic() {
         when (currentState) {
             State.FINDING_POST -> findAndClickShareButton()
             State.OPENING_SHARE_MENU -> findAndClickShareToGroup()
@@ -97,7 +123,13 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickShareButton() {
-        val rootNode = rootInActiveWindow ?: return
+        val rootNode = rootInActiveWindow
+        if (rootNode == null) {
+            Log.w(TAG, "无法获取当前窗口根节点，等待中...")
+            return
+        }
+        
+        Log.d(TAG, "开始扫描页面寻找分享按钮...")
         
         // 1. 尝试通过文本识别 (中/英)
         val shareKeywords = listOf("分享", "Share", "转发")
@@ -105,34 +137,37 @@ class FBAutomationService : AccessibilityService() {
         for (keyword in shareKeywords) {
             shareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(keyword))
         }
+        Log.d(TAG, "通过文本找到节点数量: ${shareNodes.size}")
 
         // 2. 尝试通过 contentDescription (图标模式) 识别
         if (shareNodes.isEmpty()) {
             findNodesByDescription(rootNode, shareKeywords, shareNodes)
+            Log.d(TAG, "通过描述找到节点数量: ${shareNodes.size}")
         }
 
-        // 3. 尝试通过结构化特征识别 (寻找三个按钮组中的第三个)
+        // 3. 尝试通过结构化特征识别
         if (shareNodes.isEmpty()) {
             findShareByStructure(rootNode, shareNodes)
+            Log.d(TAG, "通过结构化找到节点数量: ${shareNodes.size}")
         }
 
         // 过滤并锁定目标
         val validShareNode = shareNodes.find { node ->
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            // 避开顶部区域 (200px) 和 底部下载横幅 (200px)
-            rect.top > 250 && rect.bottom < resources.displayMetrics.heightPixels - 200
+            val isVisible = rect.top > 250 && rect.bottom < resources.displayMetrics.heightPixels - 200
+            if (!isVisible) Log.v(TAG, "跳过不可见节点: $rect")
+            isVisible
         }
 
         if (validShareNode != null) {
-            Log.d(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
+            Log.i(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
             performClick(validShareNode)
             currentState = State.OPENING_SHARE_MENU
         } else {
-            // 控制滚动频率，每 2 秒滚动一次
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastScrollTime > 2000) {
-                Log.d(TAG, "未找到分享按钮，执行精准像素滚动...")
+            if (currentTime - lastScrollTime > 3000) { // 稍微延长到 3 秒，避免滚动过快
+                Log.i(TAG, "未在当前视图发现分享按钮，尝试向下滚动...")
                 swipeUp()
                 lastScrollTime = currentTime
             }

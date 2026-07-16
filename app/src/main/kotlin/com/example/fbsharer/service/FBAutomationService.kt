@@ -92,33 +92,41 @@ class FBAutomationService : AccessibilityService() {
         currentTask = task
         currentGroupIndex = 0
         currentState = State.NAVIGATING
-        Log.d(TAG, "开始任务: ${task.targetUrl}")
+        Log.d(TAG, "🚀 开始自动化流程: ${task.targetUrl}")
         
-        // 启动浏览器逻辑
+        // 强制锁定 Chrome 的各种可能包名
+        val chromePackages = listOf("com.android.chrome", "com.google.android.apps.chrome")
         val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        try {
-            // 优先尝试使用 Chrome
-            intent.setPackage("com.android.chrome")
-            startActivity(intent)
-            Log.d(TAG, "成功启动 Chrome")
-        } catch (e: Exception) {
-            Log.e(TAG, "未找到 Chrome，尝试使用默认浏览器: ${e.message}")
+        var launched = false
+        for (pkg in chromePackages) {
             try {
-                intent.setPackage(null) // 清除包名，使用系统默认分发
+                intent.setPackage(pkg)
                 startActivity(intent)
-                Log.d(TAG, "成功启动默认浏览器")
-            } catch (e2: Exception) {
-                Log.e(TAG, "无可用的浏览器: ${e2.message}")
-                // 可以在这里发一个广播或回调通知 UI 弹出 Toast
+                Log.i(TAG, "✅ 成功启动 Chrome: $pkg")
+                launched = true
+                break
+            } catch (e: Exception) {
+                Log.w(TAG, "无法使用包名 $pkg 启动")
+            }
+        }
+
+        if (!launched) {
+            Log.e(TAG, "❌ 未找到任何 Chrome 变体，回退至系统默认浏览器")
+            intent.setPackage(null)
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Fatal: 无可用浏览器")
             }
         }
 
         scope.launch {
-            delay(5000) // 等待浏览器启动和页面加载
+            delay(5000)
             currentState = State.FINDING_POST
+            Log.d(TAG, "状态切换 -> FINDING_POST")
         }
     }
 
@@ -168,10 +176,13 @@ class FBAutomationService : AccessibilityService() {
             currentState = State.OPENING_SHARE_MENU
         } else {
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastScrollTime > 3000) { // 稍微延长到 3 秒，避免滚动过快
-                Log.i(TAG, "未在当前视图发现分享按钮，尝试向下滚动...")
-                swipeUp()
-                lastScrollTime = currentTime
+            if (currentTime - lastScrollTime > 2000) {
+                Log.i(TAG, "未在当前视图发现分享按钮，强制触发滑动...")
+                // 确保在主线程执行手势
+                scope.launch {
+                    swipeUp()
+                    lastScrollTime = System.currentTimeMillis()
+                }
             }
         }
     }

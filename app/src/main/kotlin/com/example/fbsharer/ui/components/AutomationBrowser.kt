@@ -33,10 +33,19 @@ fun AutomationBrowser(
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     databaseEnabled = true
-                    useWideViewPort = true
-                    loadWithOverviewMode = true
+                    // 修正：禁用这些可能导致页面缩放异常的设置
+                    useWideViewPort = false
+                    loadWithOverviewMode = false
+                    // 允许缩放但隐藏控件
+                    setSupportZoom(true)
+                    builtInZoomControls = false
+                    displayZoomControls = false
+                    
                     userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
                 }
+                
+                // 修正：确保滚动条不占位
+                scrollBarStyle = android.view.View.SCROLLBARS_INSIDE_OVERLAY
                 
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
@@ -45,8 +54,9 @@ fun AutomationBrowser(
                         // 尝试自动注入脚本
                         try {
                             val script = context.assets.open("fb_automation.js").bufferedReader().use { it.readText() }
-                            view?.evaluateJavascript(script) { result ->
-                                onLog("脚本注入状态: $result")
+                            // 修正：确保脚本返回明确的成功标志，并使用 String 转化
+                            view?.evaluateJavascript("(function(){ $script; return 'SUCCESS'; })();") { result ->
+                                onLog("脚本注入状态: ${result ?: "null"}")
                             }
                         } catch (e: Exception) {
                             onLog("ERROR: 脚本注入失败: ${e.message}")

@@ -25,7 +25,7 @@ fun TaskExecutionScreen(
     var logs by remember { mutableStateOf(listOf("正在初始化浏览器...")) }
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(Color.White)) {
         // 顶部控制栏
         TopAppBar(
             title = { Text("任务执行中", fontSize = 18.sp) },

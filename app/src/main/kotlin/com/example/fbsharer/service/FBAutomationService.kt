@@ -279,12 +279,26 @@ class FBAutomationService : AccessibilityService() {
         val rootNode = rootInActiveWindow ?: return
         val groupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
         
+        // 过滤出真正有效的小节点（排除整个 WebView 容器的误判）
+        fun isValidTargetNode(node: AccessibilityNodeInfo): Boolean {
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val h = Math.abs(rect.bottom - rect.top)
+            val w = Math.abs(rect.right - rect.left)
+            // 真实按钮或列表项的高度通常在 30 ~ 300 之间，过大的是容器，过小的是无效节点
+            return h in 30..400 && w > 50
+        }
+
         // 1. 尝试系统 API 按文本查找
         for (keyword in groupKeywords) {
             val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
-            if (nodes.isNotEmpty()) {
-                Log.d(TAG, "通过系统文本查找找到‘分享到小组’，点击")
-                performClick(nodes[0])
+            // 倒序查找，或者按面积最小的找，确保找到的是最深层的子节点（真正的按钮）
+            val validNode = nodes.filter { isValidTargetNode(it) }
+                                 .minByOrNull { Math.abs(it.boundsInScreen.bottom - it.boundsInScreen.top) }
+            
+            if (validNode != null) {
+                Log.d(TAG, "通过系统文本查找找到‘分享到小组’ (真实节点)，点击")
+                performClick(validNode)
                 currentState = State.SELECTING_GROUP
                 return
             }
@@ -293,15 +307,23 @@ class FBAutomationService : AccessibilityService() {
         // 2. 尝试深度遍历查找 (处理 contentDescription 或嵌套结构)
         val deque = ArrayDeque<AccessibilityNodeInfo>()
         deque.add(rootNode)
+        
+        var bestNode: AccessibilityNodeInfo? = null
+        var minHeight = Int.MAX_VALUE
+        
         while (deque.isNotEmpty()) {
             val node = deque.removeFirst()
             val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
             
-            if (groupKeywords.any { text.contains(it, ignoreCase = true) }) {
-                Log.d(TAG, "通过深度遍历找到‘分享到小组’，点击")
-                performClick(node)
-                currentState = State.SELECTING_GROUP
-                return
+            if (groupKeywords.any { text.contains(it, ignoreCase = true) } && isValidTargetNode(node)) {
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val h = Math.abs(rect.bottom - rect.top)
+                // 记录高度最小的匹配节点（最具体的叶子节点）
+                if (h < minHeight) {
+                    minHeight = h
+                    bestNode = node
+                }
             }
             
             for (i in 0 until node.childCount) {
@@ -309,8 +331,23 @@ class FBAutomationService : AccessibilityService() {
             }
         }
         
+        if (bestNode != null) {
+            Log.d(TAG, "通过深度遍历找到‘分享到小组’ (真实节点)，点击")
+            performClick(bestNode)
+            currentState = State.SELECTING_GROUP
+            return
+        }
+        
         Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
     }
+
+    // 扩展属性用于获取 Rect (兼容旧代码)
+    private val AccessibilityNodeInfo.boundsInScreen: Rect
+        get() {
+            val r = Rect()
+            getBoundsInScreen(r)
+            return r
+        }
 
     private fun findAndClickTargetGroup() {
         val rootNode = rootInActiveWindow ?: return

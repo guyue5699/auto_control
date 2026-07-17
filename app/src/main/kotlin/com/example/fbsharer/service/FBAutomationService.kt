@@ -193,10 +193,10 @@ class FBAutomationService : AccessibilityService() {
                 return@find false
             }
             
-            // 只要高度有效且中心点在屏幕内
-            val isVisible = height > 0 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100
+            // 只要高度有效（且不过大，防止误点整个图片/帖子容器）且中心点在屏幕内
+            val isVisible = height in 10..300 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100
             
-            if (!isVisible) Log.v(TAG, "跳过无效或屏幕外节点: $rect (Height: $height)")
+            if (!isVisible) Log.v(TAG, "跳过无效、过大或屏幕外节点: $rect (Height: $height)")
             isVisible
         }
 
@@ -337,6 +337,39 @@ class FBAutomationService : AccessibilityService() {
             currentState = State.SELECTING_GROUP
             return
         }
+        
+        // --- 误入详情页兜底：尝试找右下角的分享按钮 ---
+        val detailShareKeywords = listOf("分享", "Share", "转发")
+        val detailShareNodes = mutableListOf<AccessibilityNodeInfo>()
+        
+        // 1. 结构化查找（详情页底部的 3 按钮互动条）
+        findShareByStructure(rootNode, detailShareNodes)
+        
+        // 2. 文本或描述查找
+        if (detailShareNodes.isEmpty()) {
+            for (kw in detailShareKeywords) {
+                detailShareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(kw))
+            }
+            findNodesByDescription(rootNode, detailShareKeywords, detailShareNodes)
+        }
+        
+        val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
+        val fallbackNode = detailShareNodes.find { node ->
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val h = Math.abs(rect.bottom - rect.top)
+            // 特征：位于屏幕下方(>70%)，偏右(>50%)，且高度不过大(<300)
+            rect.centerY() > screenHeight * 0.7 && rect.centerX() > screenWidth * 0.5 && h in 10..300
+        }
+        
+        if (fallbackNode != null) {
+            Log.d(TAG, "误入详情页：找到右下角分享按钮，点击展开菜单")
+            performClick(fallbackNode)
+            // 保持 currentState = State.OPENING_SHARE_MENU 不变，等待下次循环就会找到‘分享到小组’
+            return
+        }
+        // ---------------------------------------------
         
         Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
     }

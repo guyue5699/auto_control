@@ -51,6 +51,7 @@ class FBAutomationService : AccessibilityService() {
         IDLE,
         NAVIGATING,
         FINDING_POST,
+        CLICKING_SHARE_IN_DETAIL,
         OPENING_SHARE_MENU,
         SELECTING_SHARE_TO_GROUP,
         SELECTING_GROUP,
@@ -83,7 +84,8 @@ class FBAutomationService : AccessibilityService() {
 
     private fun runCurrentStateLogic() {
         when (currentState) {
-            State.FINDING_POST -> findAndClickShareButton()
+            State.FINDING_POST -> findAndClickPostImageOrShare()
+            State.CLICKING_SHARE_IN_DETAIL -> findAndClickShareInDetail()
             State.OPENING_SHARE_MENU -> findAndClickShareToGroup()
             State.SELECTING_GROUP -> findAndClickTargetGroup()
             State.POSTING -> findAndClickFinalPost()
@@ -138,7 +140,7 @@ class FBAutomationService : AccessibilityService() {
         }
     }
 
-    private fun findAndClickShareButton() {
+    private fun findAndClickPostImageOrShare() {
         val rootNode = rootInActiveWindow
         if (rootNode == null) {
             Log.w(TAG, "无法获取当前窗口根节点，尝试主动滑动触发页面刷新")
@@ -152,9 +154,66 @@ class FBAutomationService : AccessibilityService() {
             return
         }
         
-        Log.d(TAG, "开始扫描页面寻找分享按钮...")
+        Log.d(TAG, "开始扫描页面寻找帖子图片或分享按钮...")
         
-        // 1. 尝试通过文本识别 (中/英)
+        // 1. 优先寻找帖子里的图片并点击进入详情页
+        val imageNodes = mutableListOf<AccessibilityNodeInfo>()
+        val dequeForImg = ArrayDeque<AccessibilityNodeInfo>()
+        dequeForImg.add(rootNode)
+        
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        
+        while (dequeForImg.isNotEmpty()) {
+            val node = dequeForImg.removeFirst()
+            val className = node.className?.toString() ?: ""
+            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+            
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val h = Math.abs(rect.bottom - rect.top)
+            val w = Math.abs(rect.right - rect.left)
+            
+            // 图片特征：类名包含 Image，或者高宽都很大（>200），且文字较少，不在屏幕最顶端或最底端
+            val isImageClass = className.contains("Image", ignoreCase = true)
+            val isLargeMedia = h > 200 && w > screenWidth * 0.5
+            val hasLittleText = text.length < 50 && !text.contains("分享") && !text.contains("赞") && !text.contains("评论")
+            
+            if ((isImageClass || isLargeMedia) && hasLittleText) {
+                // 确保它在屏幕有效可视范围内
+                if (rect.centerY() > 200 && rect.centerY() < screenHeight - 200) {
+                    imageNodes.add(node)
+                }
+            }
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { dequeForImg.add(it) }
+            }
+        }
+        
+        if (imageNodes.isNotEmpty()) {
+            // 选一个最靠中间的大图
+            val targetImage = imageNodes.maxByOrNull { 
+                val r = Rect()
+                it.getBoundsInScreen(r)
+                Math.abs(r.bottom - r.top) * Math.abs(r.right - r.left) 
+            }
+            
+            if (targetImage != null) {
+                Log.i(TAG, "🎯 发现帖子图片，优先点击图片进入详情页...")
+                performClick(targetImage)
+                
+                scope.launch {
+                    // 等待页面加载
+                    delay(3000)
+                    currentState = State.CLICKING_SHARE_IN_DETAIL
+                }
+                return
+            }
+        }
+
+        // 2. 如果没有图片，降级使用普通寻找分享按钮逻辑
+        Log.d(TAG, "未发现帖子图片，尝试直接寻找分享按钮...")
         val shareKeywords = listOf("分享", "Share", "转发")
         val shareNodes = mutableListOf<AccessibilityNodeInfo>()
         for (keyword in shareKeywords) {
@@ -219,6 +278,44 @@ class FBAutomationService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    private fun findAndClickShareInDetail() {
+        val rootNode = rootInActiveWindow ?: return
+        
+        Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享按钮...")
+        val detailShareKeywords = listOf("分享", "Share", "转发")
+        val detailShareNodes = mutableListOf<AccessibilityNodeInfo>()
+        
+        // 1. 结构化查找（详情页底部的 3 按钮互动条）
+        findShareByStructure(rootNode, detailShareNodes)
+        
+        // 2. 文本或描述查找
+        if (detailShareNodes.isEmpty()) {
+            for (kw in detailShareKeywords) {
+                detailShareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(kw))
+            }
+            findNodesByDescription(rootNode, detailShareKeywords, detailShareNodes)
+        }
+        
+        val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
+        val fallbackNode = detailShareNodes.find { node ->
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val h = Math.abs(rect.bottom - rect.top)
+            // 特征：位于屏幕下方(>70%)，偏右(>50%)，且高度不过大(<300)
+            rect.centerY() > screenHeight * 0.7 && rect.centerX() > screenWidth * 0.5 && h in 10..300
+        }
+        
+        if (fallbackNode != null) {
+            Log.d(TAG, "🎯 详情页：找到右下角分享按钮，点击展开菜单")
+            performClick(fallbackNode)
+            currentState = State.OPENING_SHARE_MENU
+            return
+        }
+        
+        Log.v(TAG, "详情页中暂未发现分享按钮，等待...")
     }
 
     private fun findNodesByDescription(root: AccessibilityNodeInfo, keywords: List<String>, result: MutableList<AccessibilityNodeInfo>) {
@@ -349,39 +446,6 @@ class FBAutomationService : AccessibilityService() {
             currentState = State.SELECTING_GROUP
             return
         }
-        
-        // --- 误入详情页兜底：尝试找右下角的分享按钮 ---
-        val detailShareKeywords = listOf("分享", "Share", "转发")
-        val detailShareNodes = mutableListOf<AccessibilityNodeInfo>()
-        
-        // 1. 结构化查找（详情页底部的 3 按钮互动条）
-        findShareByStructure(rootNode, detailShareNodes)
-        
-        // 2. 文本或描述查找
-        if (detailShareNodes.isEmpty()) {
-            for (kw in detailShareKeywords) {
-                detailShareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(kw))
-            }
-            findNodesByDescription(rootNode, detailShareKeywords, detailShareNodes)
-        }
-        
-        val screenHeight = resources.displayMetrics.heightPixels
-        val screenWidth = resources.displayMetrics.widthPixels
-        val fallbackNode = detailShareNodes.find { node ->
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            val h = Math.abs(rect.bottom - rect.top)
-            // 特征：位于屏幕下方(>70%)，偏右(>50%)，且高度不过大(<300)
-            rect.centerY() > screenHeight * 0.7 && rect.centerX() > screenWidth * 0.5 && h in 10..300
-        }
-        
-        if (fallbackNode != null) {
-            Log.d(TAG, "误入详情页：找到右下角分享按钮，点击展开菜单")
-            performClick(fallbackNode)
-            // 保持 currentState = State.OPENING_SHARE_MENU 不变，等待下次循环就会找到‘分享到小组’
-            return
-        }
-        // ---------------------------------------------
         
         Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
     }
@@ -547,12 +611,16 @@ class FBAutomationService : AccessibilityService() {
                     // 模拟全局返回操作，退回到主页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                     delay(1000)
-                    // 如果还有多层弹窗，再返回一次
+                    // 从小组发布返回后，还在详情页，再返回一次退出详情页
+                    performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                    delay(1000)
+                    // 退回主页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                     delay(1000)
                     
                     currentGroupIndex++
-                    // 重复该帖子的下一个小组分享
+                    // 重复该帖子的下一个小组分享，由于是在详情页，所以重新进入详情页比较麻烦，
+                    // 现在的逻辑是回到主页，重新找这个帖子，再点图片进入详情页分享。
                     currentState = State.FINDING_POST 
                     Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
                 }
@@ -579,6 +647,8 @@ class FBAutomationService : AccessibilityService() {
                         Log.d(TAG, "发布完成，准备返回主页...")
                         
                         // 模拟全局返回操作，退回到主页
+                        performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                        delay(1000)
                         performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                         delay(1000)
                         performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)

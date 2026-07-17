@@ -454,7 +454,10 @@ class FBAutomationService : AccessibilityService() {
             if (validNode != null) {
                 Log.d(TAG, "通过系统文本查找找到‘分享到小组’ (真实节点)，点击")
                 performClick(validNode)
-                currentState = State.SELECTING_GROUP
+                scope.launch {
+                    delay(1500) // 等待页面跳转到选择小组列表
+                    currentState = State.SELECTING_GROUP
+                }
                 return
             }
         }
@@ -490,7 +493,10 @@ class FBAutomationService : AccessibilityService() {
         if (bestNode != null) {
             Log.d(TAG, "通过深度遍历找到‘分享到小组’ (真实节点)，点击")
             performClick(bestNode)
-            currentState = State.SELECTING_GROUP
+            scope.launch {
+                delay(1500) // 等待页面跳转到选择小组列表
+                currentState = State.SELECTING_GROUP
+            }
             return
         }
         

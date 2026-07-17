@@ -277,7 +277,10 @@ class FBAutomationService : AccessibilityService() {
 
     private fun findAndClickShareToGroup() {
         val rootNode = rootInActiveWindow ?: return
-        val groupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
+        
+        // 增加更严格的关键字匹配，防止因为“分享到”这几个字重合而被截胡
+        // 比如如果只搜“分享”，可能点到了“分享到好友的个人主页”
+        val exactGroupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
         
         // 过滤出真正有效的小节点（排除整个 WebView 容器的误判）
         fun isValidTargetNode(node: AccessibilityNodeInfo): Boolean {
@@ -289,11 +292,15 @@ class FBAutomationService : AccessibilityService() {
             return h in 30..400 && w > 50
         }
 
-        // 1. 尝试系统 API 按文本查找
-        for (keyword in groupKeywords) {
+        // 1. 尝试系统 API 按文本精确查找
+        for (keyword in exactGroupKeywords) {
             val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
-            // 倒序查找，或者按面积最小的找，确保找到的是最深层的子节点（真正的按钮）
+            // 必须确保文字真正包含“小组”或“group”等核心词汇，防止系统 API 返回包含部分词汇的错误节点
             val validNode = nodes.filter { isValidTargetNode(it) }
+                                 .filter { 
+                                     val text = it.text?.toString() ?: it.contentDescription?.toString() ?: ""
+                                     text.contains("小组") || text.contains("group", ignoreCase = true)
+                                 }
                                  .minByOrNull { Math.abs(it.boundsInScreen.bottom - it.boundsInScreen.top) }
             
             if (validNode != null) {
@@ -315,7 +322,8 @@ class FBAutomationService : AccessibilityService() {
             val node = deque.removeFirst()
             val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
             
-            if (groupKeywords.any { text.contains(it, ignoreCase = true) } && isValidTargetNode(node)) {
+            // 必须严格匹配整个词组，而不能只是部分包含
+            if (exactGroupKeywords.any { text.contains(it, ignoreCase = true) } && isValidTargetNode(node)) {
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val h = Math.abs(rect.bottom - rect.top)
@@ -592,9 +600,14 @@ class FBAutomationService : AccessibilityService() {
 
         if (x > 0 && y > 0) {
             Log.d(TAG, "执行物理坐标点击: ($x, $y) - Text: ${node.text}")
-            val path = Path().apply { moveTo(x, y) }
+            val path = Path().apply { 
+                moveTo(x, y) 
+                // 为了兼容某些严格的系统，加入极小的移动使之成为一个合法的触摸事件
+                lineTo(x + 1, y + 1)
+            }
+            // 点击时间增加到 100ms，让系统确实认为这是一次“点击”而不是意外触碰
             val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
                 .build()
             
             val result = dispatchGesture(gesture, null, null)
@@ -620,16 +633,17 @@ class FBAutomationService : AccessibilityService() {
         val width = displayMetrics.widthPixels
         val height = displayMetrics.heightPixels
 
-        Log.i(TAG, "正在执行强制滚动手势...")
+        Log.i(TAG, "正在执行强制滚动手势 (缓慢模式)...")
 
         val path = Path()
-        // 从屏幕中下部开始滑，滑动到中上部，避开顶部状态栏和底部导航栏
-        // 之前是 0.1f，可能会滑得太靠上触发了系统的下拉通知栏
-        path.moveTo(width / 2f, height * 0.75f)
-        path.lineTo(width / 2f, height * 0.25f)
+        // 把滑动范围大幅度缩小，完全集中在屏幕正中间
+        // 从 60% 滑到 40%，远离任何屏幕边缘
+        path.moveTo(width / 2f, height * 0.6f)
+        path.lineTo(width / 2f, height * 0.4f)
 
         val gestureBuilder = GestureDescription.Builder()
-        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 600))
+        // 把滑动时间从 600 毫秒拉长到 1500 毫秒，变成“慢慢拖动”而不是“快速猛划(Fling)”
+        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 1500))
         
         val result = dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {

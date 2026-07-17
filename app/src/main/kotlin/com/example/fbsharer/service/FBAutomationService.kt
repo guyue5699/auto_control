@@ -266,7 +266,10 @@ class FBAutomationService : AccessibilityService() {
         if (validShareNode != null) {
             Log.i(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
             performClick(validShareNode)
-            currentState = State.OPENING_SHARE_MENU
+            scope.launch {
+                delay(1500) // 等待分享菜单动画完全弹出
+                currentState = State.OPENING_SHARE_MENU
+            }
         } else {
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastScrollTime > 2000) {
@@ -301,7 +304,10 @@ class FBAutomationService : AccessibilityService() {
             if (validNode != null) {
                 Log.d(TAG, "🎯 详情页：通过文本精确找到分享按钮，点击展开菜单")
                 performClick(validNode)
-                currentState = State.OPENING_SHARE_MENU
+                scope.launch {
+                    delay(1500) // 等待分享菜单动画完全弹出
+                    currentState = State.OPENING_SHARE_MENU
+                }
                 return
             }
         }
@@ -347,7 +353,10 @@ class FBAutomationService : AccessibilityService() {
                 if (r.centerX() > screenWidth * 0.6) {
                     Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享，点击展开菜单")
                     performClick(rightMostNode)
-                    currentState = State.OPENING_SHARE_MENU
+                    scope.launch {
+                        delay(1500) // 等待分享菜单动画完全弹出
+                        currentState = State.OPENING_SHARE_MENU
+                    }
                     return
                 }
             }

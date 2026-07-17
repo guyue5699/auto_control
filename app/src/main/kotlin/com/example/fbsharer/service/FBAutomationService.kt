@@ -28,6 +28,9 @@ class FBAutomationService : AccessibilityService() {
     private var lastScrollTime = 0L
     private var isRunning = false
     private val scope = CoroutineScope(Dispatchers.Main)
+    
+    // 用于记录已经分享过的小组名称，防止重复点击
+    private val sharedGroupNames = mutableSetOf<String>()
 
     // 定时检查器，防止无障碍事件不触发导致“假死”
     private fun startHeartbeat() {
@@ -91,6 +94,7 @@ class FBAutomationService : AccessibilityService() {
     fun startAutomation(task: PostTask) {
         currentTask = task
         currentGroupIndex = 0
+        sharedGroupNames.clear()
         currentState = State.NAVIGATING
         lastScrollTime = 0L
         Log.d(TAG, "🚀 开始启动流程...")
@@ -430,22 +434,33 @@ class FBAutomationService : AccessibilityService() {
             }
         } else {
             // “全自动遍历”模式
-            Log.d(TAG, "正在全自动遍历小组列表 (当前索引: $currentGroupIndex)")
+            Log.d(TAG, "正在全自动遍历小组列表 (已分享过的小组数: ${sharedGroupNames.size})")
             
             // 简单方案：直接找所有包含文字且可点击的节点
             val clickableNodesWithText = findClickableNodesWithText(rootNode)
             
-            if (currentGroupIndex >= clickableNodesWithText.size) {
-                Log.d(TAG, "当前页面的小组已遍历完，尝试滚动寻找更多")
-                swipeUp()
-                // 如果滚动后依然没有新节点，则视为结束
-                return
+            // 找到当前屏幕上第一个还没分享过的小组
+            val unsharedNode = clickableNodesWithText.find { node ->
+                val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+                text.isNotBlank() && !sharedGroupNames.contains(text)
             }
-
-            val targetNode = clickableNodesWithText[currentGroupIndex]
-            Log.d(TAG, "点击第 ${currentGroupIndex + 1} 个小组: ${targetNode.text}")
-            performClick(targetNode)
-            currentState = State.POSTING
+            
+            if (unsharedNode != null) {
+                val text = unsharedNode.text?.toString() ?: unsharedNode.contentDescription?.toString() ?: ""
+                Log.d(TAG, "点击尚未分享的小组: $text")
+                sharedGroupNames.add(text)
+                performClick(unsharedNode)
+                currentState = State.POSTING
+            } else {
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastScrollTime > 2000) {
+                    Log.d(TAG, "当前页面的所有可见小组都已分享过，尝试滚动寻找更多")
+                    scope.launch {
+                        swipeUp()
+                        lastScrollTime = System.currentTimeMillis()
+                    }
+                }
+            }
         }
     }
 

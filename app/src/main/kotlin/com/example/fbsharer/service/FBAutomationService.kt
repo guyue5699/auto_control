@@ -623,9 +623,10 @@ class FBAutomationService : AccessibilityService() {
         Log.i(TAG, "正在执行强制滚动手势...")
 
         val path = Path()
-        // 从屏幕最底部开始滑，避开中间可能存在的浮窗或固定容器
-        path.moveTo(width / 2f, height * 0.9f)
-        path.lineTo(width / 2f, height * 0.1f)
+        // 从屏幕中下部开始滑，滑动到中上部，避开顶部状态栏和底部导航栏
+        // 之前是 0.1f，可能会滑得太靠上触发了系统的下拉通知栏
+        path.moveTo(width / 2f, height * 0.75f)
+        path.lineTo(width / 2f, height * 0.25f)
 
         val gestureBuilder = GestureDescription.Builder()
         gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 600))

@@ -416,18 +416,37 @@ class FBAutomationService : AccessibilityService() {
         while (deque.isNotEmpty()) {
             val node = deque.removeFirst()
             
-            // 识别小组条目的特征：可点击、有文字、且不是顶部的搜索框或标题
-            val text = node.text?.toString() ?: ""
-            if (node.isClickable && text.isNotBlank() && 
-                !text.contains("搜索") && !text.contains("小组") && !text.contains("推荐")) {
-                result.add(node)
+            // 识别小组条目的特征：有文字、且不是顶部的搜索框或标题
+            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+            if (text.isNotBlank() && 
+                !text.contains("搜索") && 
+                !text.contains("选择小组") && 
+                !text.contains("推荐")) {
+                
+                // 确保它是一个真正的列表项：通过层级和尺寸来过滤
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val h = Math.abs(rect.bottom - rect.top)
+                val w = Math.abs(rect.right - rect.left)
+                
+                // 列表项通常高度在 50 到 300 之间，宽度占屏幕大半
+                val screenWidth = resources.displayMetrics.widthPixels
+                if (h in 50..300 && w > screenWidth * 0.5) {
+                    result.add(node)
+                }
             }
             
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { deque.add(it) }
             }
         }
-        return result
+        
+        // 去重，防止同一个列表项的不同子节点被多次加入
+        return result.distinctBy { 
+            val rect = Rect()
+            it.getBoundsInScreen(rect)
+            "${rect.top}_${rect.bottom}" 
+        }
     }
 
     private fun finishCurrentPost() {
@@ -442,13 +461,17 @@ class FBAutomationService : AccessibilityService() {
         val rootNode = rootInActiveWindow ?: return
         val postKeywords = listOf("发布", "Post", "分享", "Share")
         
-        // 通常在右上角
+        // 获取屏幕宽度，右上角的按钮一般在屏幕右半边
+        val screenWidth = resources.displayMetrics.widthPixels
+        
+        // 1. 尝试系统 API 按文本查找
         for (keyword in postKeywords) {
             val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
             val finalPostBtn = nodes.find { node ->
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
-                rect.top < 300 && rect.right > 500 // 右上角特征
+                // 右上角特征：位于屏幕上半部分，且偏右
+                rect.top < 300 && rect.right > screenWidth * 0.6
             }
             
             if (finalPostBtn != null) {
@@ -457,13 +480,62 @@ class FBAutomationService : AccessibilityService() {
                 
                 scope.launch {
                     delay(3000)
+                    Log.d(TAG, "发布完成，准备返回主页...")
+                    
+                    // 模拟全局返回操作，退回到主页
+                    performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                    delay(1000)
+                    // 如果还有多层弹窗，再返回一次
+                    performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                    delay(1000)
+                    
                     currentGroupIndex++
                     // 重复该帖子的下一个小组分享
                     currentState = State.FINDING_POST 
+                    Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
                 }
                 return
             }
         }
+        
+        // 2. 尝试深度遍历查找 (如果文本查不到)
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(rootNode)
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
+            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+            
+            if (postKeywords.any { text.contains(it, ignoreCase = true) }) {
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                if (rect.top < 300 && rect.right > screenWidth * 0.6) {
+                    Log.d(TAG, "深度遍历找到最终发布按钮，点击")
+                    performClick(node)
+                    
+                    scope.launch {
+                        delay(3000)
+                        Log.d(TAG, "发布完成，准备返回主页...")
+                        
+                        // 模拟全局返回操作，退回到主页
+                        performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                        delay(1000)
+                        performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                        delay(1000)
+                        
+                        currentGroupIndex++
+                        currentState = State.FINDING_POST 
+                        Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
+                    }
+                    return
+                }
+            }
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
+        }
+        
+        Log.v(TAG, "当前未发现发布按钮，可能仍在加载...")
     }
 
     private fun performClick(node: AccessibilityNodeInfo) {

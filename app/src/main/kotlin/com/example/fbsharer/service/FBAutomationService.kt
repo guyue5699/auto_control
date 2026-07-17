@@ -284,35 +284,73 @@ class FBAutomationService : AccessibilityService() {
         val rootNode = rootInActiveWindow ?: return
         
         Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享按钮...")
-        val detailShareKeywords = listOf("分享", "Share", "转发")
-        val detailShareNodes = mutableListOf<AccessibilityNodeInfo>()
-        
-        // 1. 结构化查找（详情页底部的 3 按钮互动条）
-        findShareByStructure(rootNode, detailShareNodes)
-        
-        // 2. 文本或描述查找
-        if (detailShareNodes.isEmpty()) {
-            for (kw in detailShareKeywords) {
-                detailShareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(kw))
-            }
-            findNodesByDescription(rootNode, detailShareKeywords, detailShareNodes)
-        }
-        
         val screenHeight = resources.displayMetrics.heightPixels
         val screenWidth = resources.displayMetrics.widthPixels
-        val fallbackNode = detailShareNodes.find { node ->
+        
+        // 1. 优先尝试系统文本查找
+        val detailShareKeywords = listOf("分享", "Share", "转发")
+        for (kw in detailShareKeywords) {
+            val nodes = rootNode.findAccessibilityNodeInfosByText(kw)
+            val validNode = nodes.find { node ->
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val h = Math.abs(rect.bottom - rect.top)
+                // 确保它在屏幕下半部分，且尺寸正常
+                rect.centerY() > screenHeight * 0.6 && h in 10..300
+            }
+            if (validNode != null) {
+                Log.d(TAG, "🎯 详情页：通过文本精确找到分享按钮，点击展开菜单")
+                performClick(validNode)
+                currentState = State.OPENING_SHARE_MENU
+                return
+            }
+        }
+        
+        // 2. 如果文本查不到（通常是纯图标），使用“空间位置探测法”
+        // 收集屏幕最下方（>80%）所有的疑似按钮节点
+        val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(rootNode)
+        
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
             val rect = Rect()
             node.getBoundsInScreen(rect)
             val h = Math.abs(rect.bottom - rect.top)
-            // 特征：位于屏幕下方(>70%)，偏右(>50%)，且高度不过大(<300)
-            rect.centerY() > screenHeight * 0.7 && rect.centerX() > screenWidth * 0.5 && h in 10..300
+            val w = Math.abs(rect.right - rect.left)
+            
+            // 只要在屏幕最下方 20% 区域，并且具有一定大小的独立节点
+            if (rect.centerY() > screenHeight * 0.8 && h in 20..300 && w in 20..(screenWidth / 2)) {
+                // 如果节点可点击，或者是图片/按钮容器
+                if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
+                    bottomNodes.add(node)
+                }
+            }
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
         }
         
-        if (fallbackNode != null) {
-            Log.d(TAG, "🎯 详情页：找到右下角分享按钮，点击展开菜单")
-            performClick(fallbackNode)
-            currentState = State.OPENING_SHARE_MENU
-            return
+        if (bottomNodes.isNotEmpty()) {
+            // 在底部的所有节点中，找到最靠右的那一个（centerX 最大）
+            val rightMostNode = bottomNodes.maxByOrNull { 
+                val r = Rect()
+                it.getBoundsInScreen(r)
+                r.centerX() 
+            }
+            
+            if (rightMostNode != null) {
+                val r = Rect()
+                rightMostNode.getBoundsInScreen(r)
+                // 确保它真的在右半边
+                if (r.centerX() > screenWidth * 0.6) {
+                    Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享，点击展开菜单")
+                    performClick(rightMostNode)
+                    currentState = State.OPENING_SHARE_MENU
+                    return
+                }
+            }
         }
         
         Log.v(TAG, "详情页中暂未发现分享按钮，等待...")

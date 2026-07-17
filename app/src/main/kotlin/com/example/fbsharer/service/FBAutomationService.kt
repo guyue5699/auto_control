@@ -27,6 +27,7 @@ class FBAutomationService : AccessibilityService() {
     private var currentGroupIndex = 0
     private var lastScrollTime = 0L
     private var isRunning = false
+    private var stateFailCount = 0
     private val scope = CoroutineScope(Dispatchers.Main)
     
     // 用于记录已经分享过的小组名称，防止重复点击
@@ -38,7 +39,7 @@ class FBAutomationService : AccessibilityService() {
         isRunning = true
         scope.launch {
             while (isRunning) {
-                if (currentTask != null && currentState != State.IDLE && currentState != State.NAVIGATING) {
+                if (currentTask != null && currentState != State.IDLE && currentState != State.NAVIGATING && currentState != State.WAITING) {
                     Log.v(TAG, "心跳检查: 当前状态 $currentState")
                     runCurrentStateLogic()
                 }
@@ -49,6 +50,7 @@ class FBAutomationService : AccessibilityService() {
 
     enum class State {
         IDLE,
+        WAITING,
         NAVIGATING,
         FINDING_POST,
         CLICKING_SHARE_IN_DETAIL,
@@ -73,7 +75,7 @@ class FBAutomationService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (currentTask == null || currentState == State.IDLE) return
+        if (currentTask == null || currentState == State.IDLE || currentState == State.WAITING) return
         
         // 响应窗口变化事件，立即执行逻辑
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || 
@@ -99,6 +101,7 @@ class FBAutomationService : AccessibilityService() {
         sharedGroupNames.clear()
         currentState = State.NAVIGATING
         lastScrollTime = 0L
+        stateFailCount = 0
         Log.d(TAG, "🚀 开始启动流程...")
 
         val baseIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(task.targetUrl)).apply {
@@ -265,10 +268,12 @@ class FBAutomationService : AccessibilityService() {
 
         if (validShareNode != null) {
             Log.i(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
+            currentState = State.WAITING
             performClick(validShareNode)
             scope.launch {
                 delay(1500) // 等待分享菜单动画完全弹出
                 currentState = State.OPENING_SHARE_MENU
+                runCurrentStateLogic()
             }
         } else {
             val currentTime = System.currentTimeMillis()
@@ -303,10 +308,12 @@ class FBAutomationService : AccessibilityService() {
             }
             if (validNode != null) {
                 Log.d(TAG, "🎯 详情页：通过文本精确找到分享按钮，点击展开菜单")
+                currentState = State.WAITING
                 performClick(validNode)
                 scope.launch {
                     delay(1500) // 等待分享菜单动画完全弹出
                     currentState = State.OPENING_SHARE_MENU
+                    runCurrentStateLogic()
                 }
                 return
             }
@@ -352,10 +359,12 @@ class FBAutomationService : AccessibilityService() {
                 // 确保它真的在右半边
                 if (r.centerX() > screenWidth * 0.6) {
                     Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享，点击展开菜单")
+                    currentState = State.WAITING
                     performClick(rightMostNode)
                     scope.launch {
                         delay(1500) // 等待分享菜单动画完全弹出
                         currentState = State.OPENING_SHARE_MENU
+                        runCurrentStateLogic()
                     }
                     return
                 }
@@ -453,10 +462,13 @@ class FBAutomationService : AccessibilityService() {
             
             if (validNode != null) {
                 Log.d(TAG, "通过系统文本查找找到‘分享到小组’ (真实节点)，点击")
+                stateFailCount = 0
+                currentState = State.WAITING
                 performClick(validNode)
                 scope.launch {
                     delay(1500) // 等待页面跳转到选择小组列表
                     currentState = State.SELECTING_GROUP
+                    runCurrentStateLogic()
                 }
                 return
             }
@@ -492,10 +504,27 @@ class FBAutomationService : AccessibilityService() {
         
         if (bestNode != null) {
             Log.d(TAG, "通过深度遍历找到‘分享到小组’ (真实节点)，点击")
+            stateFailCount = 0
+            currentState = State.WAITING
             performClick(bestNode)
             scope.launch {
                 delay(1500) // 等待页面跳转到选择小组列表
                 currentState = State.SELECTING_GROUP
+                runCurrentStateLogic()
+            }
+            return
+        }
+        
+        stateFailCount++
+        if (stateFailCount > 5) {
+            Log.w(TAG, "长时间未找到‘分享到小组’，可能点错了，执行返回重新找帖子...")
+            stateFailCount = 0
+            currentState = State.WAITING
+            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            scope.launch {
+                delay(1500)
+                currentState = State.FINDING_POST
+                runCurrentStateLogic()
             }
             return
         }
@@ -566,8 +595,13 @@ class FBAutomationService : AccessibilityService() {
                 val text = unsharedNode.text?.toString() ?: unsharedNode.contentDescription?.toString() ?: ""
                 Log.d(TAG, "点击尚未分享的小组: $text")
                 sharedGroupNames.add(text)
+                currentState = State.WAITING
                 performClick(unsharedNode)
-                currentState = State.POSTING
+                scope.launch {
+                    delay(2000) // 等待发布页面完全加载
+                    currentState = State.POSTING
+                    runCurrentStateLogic()
+                }
             } else {
                 val currentTime = System.currentTimeMillis()
                 if (currentTime - lastScrollTime > 2000) {
@@ -655,6 +689,7 @@ class FBAutomationService : AccessibilityService() {
             
             if (finalPostBtn != null) {
                 Log.d(TAG, "找到最终发布按钮，点击")
+                currentState = State.WAITING
                 performClick(finalPostBtn)
                 
                 scope.launch {
@@ -663,19 +698,19 @@ class FBAutomationService : AccessibilityService() {
                     
                     // 模拟全局返回操作，退回到主页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                    delay(1000)
+                    delay(1500)
                     // 从小组发布返回后，还在详情页，再返回一次退出详情页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                    delay(1000)
+                    delay(1500)
                     // 退回主页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                    delay(1000)
+                    delay(1500)
                     
                     currentGroupIndex++
-                    // 重复该帖子的下一个小组分享，由于是在详情页，所以重新进入详情页比较麻烦，
-                    // 现在的逻辑是回到主页，重新找这个帖子，再点图片进入详情页分享。
+                    // 重复该帖子的下一个小组分享
                     currentState = State.FINDING_POST 
                     Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
+                    runCurrentStateLogic()
                 }
                 return
             }
@@ -693,6 +728,7 @@ class FBAutomationService : AccessibilityService() {
                 node.getBoundsInScreen(rect)
                 if (rect.top < 300 && rect.right > screenWidth * 0.6) {
                     Log.d(TAG, "深度遍历找到最终发布按钮，点击")
+                    currentState = State.WAITING
                     performClick(node)
                     
                     scope.launch {
@@ -701,15 +737,16 @@ class FBAutomationService : AccessibilityService() {
                         
                         // 模拟全局返回操作，退回到主页
                         performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                        delay(1000)
+                        delay(1500)
                         performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                        delay(1000)
+                        delay(1500)
                         performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                        delay(1000)
+                        delay(1500)
                         
                         currentGroupIndex++
                         currentState = State.FINDING_POST 
                         Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
+                        runCurrentStateLogic()
                     }
                     return
                 }
@@ -718,6 +755,20 @@ class FBAutomationService : AccessibilityService() {
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { deque.add(it) }
             }
+        }
+        
+        stateFailCount++
+        if (stateFailCount > 5) {
+            Log.w(TAG, "长时间未找到‘发布’按钮，可能进错了页面，执行返回...")
+            stateFailCount = 0
+            currentState = State.WAITING
+            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            scope.launch {
+                delay(1500)
+                currentState = State.SELECTING_GROUP
+                runCurrentStateLogic()
+            }
+            return
         }
         
         Log.v(TAG, "当前未发现发布按钮，可能仍在加载...")

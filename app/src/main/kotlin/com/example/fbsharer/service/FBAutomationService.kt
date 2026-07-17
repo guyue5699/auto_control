@@ -454,18 +454,23 @@ class FBAutomationService : AccessibilityService() {
             if (text.isNotBlank() && 
                 !text.contains("搜索") && 
                 !text.contains("选择小组") && 
-                !text.contains("推荐")) {
+                !text.contains("推荐") &&
+                !text.contains("群组") &&
+                !text.contains("Groups")) {
                 
-                // 确保它是一个真正的列表项：通过层级和尺寸来过滤
+                // 放宽尺寸限制，并结合可点击属性。在 Web 中，列表项本身可能不可点击，但包含文字的子节点可点击
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val h = Math.abs(rect.bottom - rect.top)
                 val w = Math.abs(rect.right - rect.left)
                 
-                // 列表项通常高度在 50 到 300 之间，宽度占屏幕大半
                 val screenWidth = resources.displayMetrics.widthPixels
-                if (h in 50..300 && w > screenWidth * 0.5) {
-                    result.add(node)
+                
+                // 只要高度在合理范围内 (20~400)，并且它是可点击的，或者是占据大部分宽度的容器，就认为它是候选条目
+                if (h in 20..400) {
+                    if (node.isClickable || w > screenWidth * 0.4) {
+                        result.add(node)
+                    }
                 }
             }
             
@@ -474,11 +479,12 @@ class FBAutomationService : AccessibilityService() {
             }
         }
         
-        // 去重，防止同一个列表项的不同子节点被多次加入
+        // 去重，防止同一个列表项的不同子节点被多次加入（按照纵坐标进行粗略去重）
         return result.distinctBy { 
             val rect = Rect()
             it.getBoundsInScreen(rect)
-            "${rect.top}_${rect.bottom}" 
+            // 如果两个节点的顶部坐标差距在 20 像素以内，就认为是同一行（同一个条目）
+            rect.top / 20 
         }
     }
 

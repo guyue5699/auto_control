@@ -498,9 +498,31 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickShareToGroup() {
+        val rootNode = rootInActiveWindow
         val exactGroupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
         
-        Log.d(TAG, "尝试通过 OCR 寻找分享到小组按钮...")
+        // 1. 优先尝试使用原生节点查询（最稳定，不需要截图）
+        if (rootNode != null) {
+            for (keyword in exactGroupKeywords) {
+                val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
+                if (nodes.isNotEmpty()) {
+                    val validNode = nodes.find { it.isClickable || it.parent?.isClickable == true } ?: nodes[0]
+                    Log.i(TAG, "🎯 通过原生节点找到‘分享到小组’，执行点击")
+                    stateFailCount = 0
+                    currentState = State.WAITING
+                    performClick(validNode)
+                    scope.launch {
+                        delay(1500) // 等待页面跳转到选择小组列表
+                        currentState = State.SELECTING_GROUP
+                        runCurrentStateLogic()
+                    }
+                    return
+                }
+            }
+        }
+        
+        // 2. 如果原生节点找不到，再尝试使用 OCR
+        Log.d(TAG, "原生节点未找到，尝试通过 OCR 寻找分享到小组按钮...")
         findTextByOCRAndClick(
             keywords = exactGroupKeywords,
             onSuccess = {

@@ -70,6 +70,9 @@ dependencies {
     // Gson
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // Google ML Kit OCR (Chinese model supports both Chinese and English)
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")

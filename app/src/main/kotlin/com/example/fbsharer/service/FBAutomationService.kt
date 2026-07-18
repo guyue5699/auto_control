@@ -5,11 +5,16 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.fbsharer.data.PostTask
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -394,89 +399,83 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickShareInDetail() {
-        val rootNode = rootInActiveWindow ?: return
-        
         Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享按钮...")
         val screenHeight = resources.displayMetrics.heightPixels
         val screenWidth = resources.displayMetrics.widthPixels
-        
-        // 1. 优先尝试系统文本查找
         val detailShareKeywords = listOf("分享", "Share", "转发")
-        for (kw in detailShareKeywords) {
-            val nodes = rootNode.findAccessibilityNodeInfosByText(kw)
-            val validNode = nodes.find { node ->
-                val rect = Rect()
-                node.getBoundsInScreen(rect)
-                val h = Math.abs(rect.bottom - rect.top)
-                // 确保它在屏幕下半部分，且尺寸正常
-                rect.centerY() > screenHeight * 0.6 && h in 10..300
-            }
-            if (validNode != null) {
-                Log.d(TAG, "🎯 详情页：通过文本精确找到分享按钮，点击展开菜单")
+        
+        findTextByOCRAndClick(
+            keywords = detailShareKeywords,
+            checkCondition = { rect ->
+                // 确保它在屏幕下半部分，且偏右
+                rect.centerY() > screenHeight * 0.6 && rect.centerX() > screenWidth * 0.5
+            },
+            onSuccess = {
                 currentState = State.WAITING
-                performClick(validNode)
                 scope.launch {
                     delay(1500) // 等待分享菜单动画完全弹出
                     currentState = State.OPENING_SHARE_MENU
                     runCurrentStateLogic()
                 }
-                return
-            }
-        }
-        
-        // 2. 如果文本查不到（通常是纯图标），使用“空间位置探测法”
-        // 收集屏幕最下方（>80%）所有的疑似按钮节点
-        val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
-        val deque = ArrayDeque<AccessibilityNodeInfo>()
-        deque.add(rootNode)
-        
-        while (deque.isNotEmpty()) {
-            val node = deque.removeFirst()
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            val h = Math.abs(rect.bottom - rect.top)
-            val w = Math.abs(rect.right - rect.left)
-            
-            // 只要在屏幕最下方 20% 区域，并且具有一定大小的独立节点
-            if (rect.centerY() > screenHeight * 0.8 && h in 20..300 && w in 20..(screenWidth / 2)) {
-                // 如果节点可点击，或者是图片/按钮容器
-                if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
-                    bottomNodes.add(node)
-                }
-            }
-            
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { deque.add(it) }
-            }
-        }
-        
-        if (bottomNodes.isNotEmpty()) {
-            // 在底部的所有节点中，找到最靠右的那一个（centerX 最大）
-            val rightMostNode = bottomNodes.maxByOrNull { 
-                val r = Rect()
-                it.getBoundsInScreen(r)
-                r.centerX() 
-            }
-            
-            if (rightMostNode != null) {
-                val r = Rect()
-                rightMostNode.getBoundsInScreen(r)
-                // 确保它真的在右半边
-                if (r.centerX() > screenWidth * 0.6) {
-                    Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享，点击展开菜单")
-                    currentState = State.WAITING
-                    performClick(rightMostNode)
-                    scope.launch {
-                        delay(1500) // 等待分享菜单动画完全弹出
-                        currentState = State.OPENING_SHARE_MENU
-                        runCurrentStateLogic()
+            },
+            onNotFound = {
+                Log.v(TAG, "OCR 未发现分享文字，可能只有图标，启动空间位置探测降级方案...")
+                val rootNode = rootInActiveWindow ?: return@findTextByOCRAndClick
+                
+                // 收集屏幕最下方（>80%）所有的疑似按钮节点
+                val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
+                val deque = ArrayDeque<AccessibilityNodeInfo>()
+                deque.add(rootNode)
+                
+                while (deque.isNotEmpty()) {
+                    val node = deque.removeFirst()
+                    val rect = Rect()
+                    node.getBoundsInScreen(rect)
+                    val h = Math.abs(rect.bottom - rect.top)
+                    val w = Math.abs(rect.right - rect.left)
+                    
+                    // 只要在屏幕最下方 20% 区域，并且具有一定大小的独立节点
+                    if (rect.centerY() > screenHeight * 0.8 && h in 20..300 && w in 20..(screenWidth / 2)) {
+                        // 如果节点可点击，或者是图片/按钮容器
+                        if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
+                            bottomNodes.add(node)
+                        }
                     }
-                    return
+                    
+                    for (i in 0 until node.childCount) {
+                        node.getChild(i)?.let { deque.add(it) }
+                    }
                 }
+                
+                if (bottomNodes.isNotEmpty()) {
+                    // 在底部的所有节点中，找到最靠右的那一个（centerX 最大）
+                    val rightMostNode = bottomNodes.maxByOrNull { 
+                        val r = Rect()
+                        it.getBoundsInScreen(r)
+                        r.centerX() 
+                    }
+                    
+                    if (rightMostNode != null) {
+                        val r = Rect()
+                        rightMostNode.getBoundsInScreen(r)
+                        // 确保它真的在右半边
+                        if (r.centerX() > screenWidth * 0.6) {
+                            Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享图标，点击展开菜单")
+                            currentState = State.WAITING
+                            performClick(rightMostNode)
+                            scope.launch {
+                                delay(1500) // 等待分享菜单动画完全弹出
+                                currentState = State.OPENING_SHARE_MENU
+                                runCurrentStateLogic()
+                            }
+                            return@findTextByOCRAndClick
+                        }
+                    }
+                }
+                
+                Log.v(TAG, "详情页中暂未发现分享按钮或图标，等待...")
             }
-        }
-        
-        Log.v(TAG, "详情页中暂未发现分享按钮，等待...")
+        )
     }
 
     private fun findNodesByDescription(root: AccessibilityNodeInfo, keywords: List<String>, result: MutableList<AccessibilityNodeInfo>) {
@@ -538,103 +537,37 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickShareToGroup() {
-        val rootNode = rootInActiveWindow ?: return
-        
-        // 增加更严格的关键字匹配，防止因为“分享到”这几个字重合而被截胡
-        // 比如如果只搜“分享”，可能点到了“分享到好友的个人主页”
         val exactGroupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
         
-        // 过滤出真正有效的小节点（排除整个 WebView 容器的误判）
-        fun isValidTargetNode(node: AccessibilityNodeInfo): Boolean {
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            val h = Math.abs(rect.bottom - rect.top)
-            val w = Math.abs(rect.right - rect.left)
-            // 真实按钮或列表项的高度通常在 30 ~ 300 之间，过大的是容器，过小的是无效节点
-            return h in 30..400 && w > 50
-        }
-
-        // 1. 尝试系统 API 按文本精确查找
-        for (keyword in exactGroupKeywords) {
-            val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
-            // 必须确保文字真正包含“小组”或“group”等核心词汇，防止系统 API 返回包含部分词汇的错误节点
-            val validNode = nodes.filter { isValidTargetNode(it) }
-                                 .filter { 
-                                     val text = it.text?.toString() ?: it.contentDescription?.toString() ?: ""
-                                     text.contains("小组") || text.contains("group", ignoreCase = true)
-                                 }
-                                 .minByOrNull { Math.abs(it.boundsInScreen.bottom - it.boundsInScreen.top) }
-            
-            if (validNode != null) {
-                Log.d(TAG, "通过系统文本查找找到‘分享到小组’ (真实节点)，点击")
+        Log.d(TAG, "尝试通过 OCR 寻找分享到小组按钮...")
+        findTextByOCRAndClick(
+            keywords = exactGroupKeywords,
+            onSuccess = {
                 stateFailCount = 0
                 currentState = State.WAITING
-                performClick(validNode)
                 scope.launch {
                     delay(1500) // 等待页面跳转到选择小组列表
                     currentState = State.SELECTING_GROUP
                     runCurrentStateLogic()
                 }
-                return
-            }
-        }
-
-        // 2. 尝试深度遍历查找 (处理 contentDescription 或嵌套结构)
-        val deque = ArrayDeque<AccessibilityNodeInfo>()
-        deque.add(rootNode)
-        
-        var bestNode: AccessibilityNodeInfo? = null
-        var minHeight = Int.MAX_VALUE
-        
-        while (deque.isNotEmpty()) {
-            val node = deque.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
-            
-            // 必须严格匹配整个词组，而不能只是部分包含
-            if (exactGroupKeywords.any { text.contains(it, ignoreCase = true) } && isValidTargetNode(node)) {
-                val rect = Rect()
-                node.getBoundsInScreen(rect)
-                val h = Math.abs(rect.bottom - rect.top)
-                // 记录高度最小的匹配节点（最具体的叶子节点）
-                if (h < minHeight) {
-                    minHeight = h
-                    bestNode = node
+            },
+            onNotFound = {
+                stateFailCount++
+                if (stateFailCount > 5) {
+                    Log.w(TAG, "长时间未找到‘分享到小组’，可能点错了，执行返回重新找帖子...")
+                    stateFailCount = 0
+                    currentState = State.WAITING
+                    performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                    scope.launch {
+                        delay(1500)
+                        currentState = State.FINDING_POST
+                        runCurrentStateLogic()
+                    }
+                } else {
+                    Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
                 }
             }
-            
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { deque.add(it) }
-            }
-        }
-        
-        if (bestNode != null) {
-            Log.d(TAG, "通过深度遍历找到‘分享到小组’ (真实节点)，点击")
-            stateFailCount = 0
-            currentState = State.WAITING
-            performClick(bestNode)
-            scope.launch {
-                delay(1500) // 等待页面跳转到选择小组列表
-                currentState = State.SELECTING_GROUP
-                runCurrentStateLogic()
-            }
-            return
-        }
-        
-        stateFailCount++
-        if (stateFailCount > 5) {
-            Log.w(TAG, "长时间未找到‘分享到小组’，可能点错了，执行返回重新找帖子...")
-            stateFailCount = 0
-            currentState = State.WAITING
-            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-            scope.launch {
-                delay(1500)
-                currentState = State.FINDING_POST
-                runCurrentStateLogic()
-            }
-            return
-        }
-        
-        Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
+        )
     }
 
     // 扩展属性用于获取 Rect (兼容旧代码)
@@ -776,40 +709,28 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickFinalPost() {
-        val rootNode = rootInActiveWindow ?: return
         val postKeywords = listOf("发布", "Post", "分享", "Share")
-        
-        // 获取屏幕宽度，右上角的按钮一般在屏幕右半边
         val screenWidth = resources.displayMetrics.widthPixels
         
-        // 1. 尝试系统 API 按文本查找
-        for (keyword in postKeywords) {
-            val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
-            val finalPostBtn = nodes.find { node ->
-                val rect = Rect()
-                node.getBoundsInScreen(rect)
-                val h = Math.abs(rect.bottom - rect.top)
-                val w = Math.abs(rect.right - rect.left)
-                // 右上角特征：位于屏幕上半部分，且偏右，且尺寸是一个正常的按钮，而不是巨大的容器
-                rect.top < 400 && rect.right > screenWidth * 0.5 && h in 20..200 && w in 40..(screenWidth / 2)
-            }
-            
-            if (finalPostBtn != null) {
-                Log.d(TAG, "找到最终发布按钮，点击")
+        Log.d(TAG, "尝试通过 OCR 寻找右上角发布按钮...")
+        
+        findTextByOCRAndClick(
+            keywords = postKeywords,
+            checkCondition = { rect ->
+                // 右上角特征：位于屏幕上半部分，且偏右
+                rect.top < 400 && rect.centerX() > screenWidth * 0.5
+            },
+            onSuccess = {
+                Log.d(TAG, "OCR点击发布按钮完成，准备返回主页...")
                 currentState = State.WAITING
-                performClick(finalPostBtn)
-                
                 scope.launch {
-                    delay(3000)
-                    Log.d(TAG, "发布完成，准备返回主页...")
+                    delay(3000) // 等待发布请求发出
                     
                     // 模拟全局返回操作，退回到主页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                     delay(1500)
-                    // 从小组发布返回后，还在详情页，再返回一次退出详情页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                     delay(1500)
-                    // 退回主页
                     performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                     delay(1500)
                     
@@ -819,68 +740,152 @@ class FBAutomationService : AccessibilityService() {
                     Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
                     runCurrentStateLogic()
                 }
-                return
-            }
-        }
-        
-        // 2. 尝试深度遍历查找 (如果文本查不到)
-        val deque = ArrayDeque<AccessibilityNodeInfo>()
-        deque.add(rootNode)
-        while (deque.isNotEmpty()) {
-            val node = deque.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
-            
-            if (postKeywords.any { text.contains(it, ignoreCase = true) }) {
-                val rect = Rect()
-                node.getBoundsInScreen(rect)
-                val h = Math.abs(rect.bottom - rect.top)
-                val w = Math.abs(rect.right - rect.left)
-                if (rect.top < 400 && rect.right > screenWidth * 0.5 && h in 20..200 && w in 40..(screenWidth / 2)) {
-                    Log.d(TAG, "深度遍历找到最终发布按钮，点击")
-                    currentState = State.WAITING
-                    performClick(node)
+            },
+            onNotFound = {
+                Log.v(TAG, "OCR 未发现右上角发布文字，可能为图标或仍在加载，启动空间位置探测降级方案...")
+                val rootNode = rootInActiveWindow
+                if (rootNode != null) {
+                    val deque = ArrayDeque<AccessibilityNodeInfo>()
+                    deque.add(rootNode)
                     
+                    var rightTopBtn: AccessibilityNodeInfo? = null
+                    
+                    while (deque.isNotEmpty()) {
+                        val node = deque.removeFirst()
+                        val rect = Rect()
+                        node.getBoundsInScreen(rect)
+                        val h = Math.abs(rect.bottom - rect.top)
+                        val w = Math.abs(rect.right - rect.left)
+                        
+                        // 寻找右上角的按钮图标：位于屏幕顶部，偏右，尺寸较小，通常可点击或者是 Image/Button
+                        if (rect.top < 400 && rect.right > screenWidth * 0.8 && h in 20..200 && w in 20..200) {
+                            if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
+                                // 排除掉一些太靠近边缘的系统图标（如关闭、菜单），尽量选靠左一点的发送图标
+                                if (rightTopBtn == null || rect.centerX() < rightTopBtn.boundsInScreen.centerX()) {
+                                    rightTopBtn = node
+                                }
+                            }
+                        }
+                        
+                        for (i in 0 until node.childCount) {
+                            node.getChild(i)?.let { deque.add(it) }
+                        }
+                    }
+                    
+                    if (rightTopBtn != null) {
+                        Log.d(TAG, "🎯 通过位置找到右上角疑似发布图标，点击...")
+                        currentState = State.WAITING
+                        performClick(rightTopBtn)
+                        
+                        scope.launch {
+                            delay(3000)
+                            Log.d(TAG, "发布完成，准备返回主页...")
+                            
+                            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                            delay(1500)
+                            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                            delay(1500)
+                            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                            delay(1500)
+                            
+                            currentGroupIndex++
+                            currentState = State.FINDING_POST 
+                            Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
+                            runCurrentStateLogic()
+                        }
+                        return@findTextByOCRAndClick
+                    }
+                }
+                
+                stateFailCount++
+                if (stateFailCount > 5) {
+                    Log.w(TAG, "长时间未找到‘发布’按钮或图标，可能进错了页面，执行返回...")
+                    stateFailCount = 0
+                    currentState = State.WAITING
+                    performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                     scope.launch {
-                        delay(3000)
-                        Log.d(TAG, "发布完成，准备返回主页...")
-                        
-                        // 模拟全局返回操作，退回到主页
-                        performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                         delay(1500)
-                        performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                        delay(1500)
-                        performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                        delay(1500)
-                        
-                        currentGroupIndex++
-                        currentState = State.FINDING_POST 
-                        Log.d(TAG, "回到寻找帖子状态，准备分享第 ${currentGroupIndex + 1} 个小组")
+                        currentState = State.SELECTING_GROUP
                         runCurrentStateLogic()
                     }
-                    return
+                } else {
+                    Log.v(TAG, "当前未发现发布按钮，可能仍在加载...")
                 }
             }
-            
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { deque.add(it) }
-            }
+        )
+    }
+
+    private val textRecognizer by lazy {
+        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    }
+
+    private fun findTextByOCRAndClick(
+        keywords: List<String>,
+        checkCondition: ((Rect) -> Boolean)? = null,
+        onSuccess: () -> Unit,
+        onNotFound: () -> Unit
+    ) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    val bitmap = Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
+                    if (bitmap == null) {
+                        screenshot.hardwareBuffer.close()
+                        return onNotFound()
+                    }
+                    val image = InputImage.fromBitmap(bitmap, 0)
+                    textRecognizer.process(image)
+                        .addOnSuccessListener { visionText ->
+                            var clicked = false
+                            for (block in visionText.textBlocks) {
+                                val text = block.text
+                                if (keywords.any { text.contains(it, ignoreCase = true) }) {
+                                    val rect = block.boundingBox
+                                    if (rect != null && (checkCondition == null || checkCondition(rect))) {
+                                        val x = rect.centerX().toFloat()
+                                        val y = rect.centerY().toFloat()
+                                        Log.d(TAG, "🎯 OCR锁定 '$text' 坐标: ($x, $y)，执行点击")
+                                        performPhysicalClickXY(x, y)
+                                        clicked = true
+                                        onSuccess()
+                                        break
+                                    }
+                                }
+                            }
+                            if (!clicked) {
+                                onNotFound()
+                            }
+                            screenshot.hardwareBuffer.close()
+                        }
+                        .addOnFailureListener {
+                            Log.e(TAG, "OCR识别失败: ${it.message}")
+                            onNotFound()
+                            screenshot.hardwareBuffer.close()
+                        }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    Log.e(TAG, "截图失败，错误码: $errorCode")
+                    onNotFound()
+                }
+            })
+        } else {
+            Log.e(TAG, "系统版本低于Android 11，无法使用OCR截图功能")
+            onNotFound()
         }
-        
-        stateFailCount++
-        if (stateFailCount > 5) {
-            Log.w(TAG, "长时间未找到‘发布’按钮，可能进错了页面，执行返回...")
-            stateFailCount = 0
-            currentState = State.WAITING
-            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-            scope.launch {
-                delay(1500)
-                currentState = State.SELECTING_GROUP
-                runCurrentStateLogic()
+    }
+
+    private fun performPhysicalClickXY(x: Float, y: Float) {
+        if (x > 0 && y > 0) {
+            val path = Path().apply { 
+                moveTo(x, y) 
+                lineTo(x + 1, y + 1)
             }
-            return
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
+                .build()
+            dispatchGesture(gesture, null, null)
         }
-        
-        Log.v(TAG, "当前未发现发布按钮，可能仍在加载...")
     }
 
     private fun performClick(node: AccessibilityNodeInfo) {

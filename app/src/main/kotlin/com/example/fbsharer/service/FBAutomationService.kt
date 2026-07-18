@@ -33,6 +33,7 @@ class FBAutomationService : AccessibilityService() {
     private var lastScrollTime = 0L
     private var isRunning = false
     private var stateFailCount = 0
+    private var skipImageClickOnce = false
     private var targetBrowserPackage = "com.android.chrome"
     private val scope = CoroutineScope(Dispatchers.Main)
     
@@ -105,6 +106,21 @@ class FBAutomationService : AccessibilityService() {
         // 响应窗口变化事件，立即执行逻辑
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || 
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            
+            // 全局拦截：处理系统弹窗（例如浏览器达到标签页上限）
+            val root = rootInActiveWindow
+            if (root != null) {
+                val dialogNodes = root.findAccessibilityNodeInfosByText("已达到标签页数上限")
+                if (dialogNodes.isNotEmpty()) {
+                    Log.w(TAG, "🚨 检测到浏览器系统弹窗：已达到标签页数上限，尝试自动关闭")
+                    val confirmNodes = root.findAccessibilityNodeInfosByText("确定")
+                    if (confirmNodes.isNotEmpty()) {
+                        performClick(confirmNodes[0])
+                        return
+                    }
+                }
+            }
+            
             runCurrentStateLogic()
         }
     }
@@ -224,113 +240,166 @@ class FBAutomationService : AccessibilityService() {
         
         Log.d(TAG, "开始扫描页面寻找帖子图片或分享按钮...")
         
-        // 1. 优先寻找帖子里的图片并点击进入详情页
         val imageNodes = mutableListOf<AccessibilityNodeInfo>()
-        val dequeForImg = ArrayDeque<AccessibilityNodeInfo>()
-        dequeForImg.add(rootNode)
-        
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
         
-        while (dequeForImg.isNotEmpty()) {
-            val node = dequeForImg.removeFirst()
+        if (!skipImageClickOnce) {
+            // 1. 优先寻找帖子里的图片并点击进入详情页
+            val dequeForImg = ArrayDeque<AccessibilityNodeInfo>()
+            dequeForImg.add(rootNode)
             
-            // 如果节点被标记为 Image 或者是含有大图的容器，或者是包含图片特征的节点
-            val contentDesc = node.contentDescription?.toString() ?: ""
-            val textStr = node.text?.toString() ?: ""
+            while (dequeForImg.isNotEmpty()) {
+                val node = dequeForImg.removeFirst()
+                
+                // 如果节点被标记为 Image 或者是含有大图的容器，或者是包含图片特征的节点
+                val contentDesc = node.contentDescription?.toString() ?: ""
+                val textStr = node.text?.toString() ?: ""
+                
+                if (node.className?.contains("Image") == true || 
+                    contentDesc.contains("照片") || contentDesc.contains("photo", ignoreCase = true) ||
+                    textStr.contains("照片") || textStr.contains("photo", ignoreCase = true)) {
+                    val rect = Rect()
+                    node.getBoundsInScreen(rect)
+                    val h = Math.abs(rect.bottom - rect.top)
+                    val w = Math.abs(rect.right - rect.left)
+                    
+                    // 排除个人主页顶部的头像（通常是一个居中偏左或居中的圆形图片，并且 Y 坐标非常靠上）
+                    // 以及排除修改封面的横幅图片
+                    val isAvatarOrCover = rect.top < screenHeight * 0.25
+                    
+                    // 排除系统级的导航栏图标
+                    val isNavBarIcon = rect.top < 200 && w < 150 && h < 150
+                    
+                    // 放宽图片特征限制：只要高度 > 100 且宽度占据大半个屏幕，就认为是帖子配图
+                    // 新增：必须排除顶部的封面图或头像（Y坐标必须大于屏幕高度的 35%）
+                    // 新增：高度不能超过屏幕高度的 80%，否则可能是误判了整个滚动容器
+                    if (!isAvatarOrCover && !isNavBarIcon && h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > screenHeight * 0.35 && rect.centerY() < screenHeight - 100 && h < screenHeight * 0.8) {
+                        imageNodes.add(node)
+                    }
+                }
+                
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { dequeForImg.add(it) }
+                }
+            }
             
-            if (node.className?.contains("Image") == true || 
-                contentDesc.contains("照片") || contentDesc.contains("photo", ignoreCase = true) ||
-                textStr.contains("照片") || textStr.contains("photo", ignoreCase = true)) {
+            if (imageNodes.isNotEmpty()) {
+                // 挑一个处于屏幕中央偏上的图片
+                val bestImageNode = imageNodes.minByOrNull { 
+                    val r = Rect()
+                    it.getBoundsInScreen(r)
+                    Math.abs(r.centerY() - screenHeight / 2)
+                }
+                
+                if (bestImageNode != null) {
+                    Log.i(TAG, "🎯 找到帖子图片，点击进入详情页")
+                    currentState = State.WAITING
+                    performClick(bestImageNode)
+                    scope.launch {
+                        delay(3000) // 增加等待时间，防止网络慢导致判断过早
+                        
+                        // 检查是否误点了头像/封面，跳到了个人主页（特征：有“教育经历”、“查看全部好友”）
+                        val rootAfterClick = rootInActiveWindow
+                        if (rootAfterClick != null) {
+                            val isProfilePage = rootAfterClick.findAccessibilityNodeInfosByText("教育经历").isNotEmpty() || 
+                                              rootAfterClick.findAccessibilityNodeInfosByText("查看全部").isNotEmpty()
+                            
+                            if (isProfilePage) {
+                                Log.w(TAG, "误点进入了个人主页，执行返回并重新寻找帖子...")
+                                performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                                delay(1500)
+                                skipImageClickOnce = true
+                                currentState = State.FINDING_POST
+                                runCurrentStateLogic()
+                                return@launch
+                            }
+                        }
+                        
+                        currentState = State.CLICKING_SHARE_IN_DETAIL
+                        runCurrentStateLogic()
+                    }
+                    return
+                }
+            }
+            
+            // 重新遍历寻找通过尺寸猜测的图片
+            val dequeForImg2 = ArrayDeque<AccessibilityNodeInfo>()
+            dequeForImg2.add(rootNode)
+            
+            while (dequeForImg2.isNotEmpty()) {
+                val node = dequeForImg2.removeFirst()
+                val className = node.className?.toString() ?: ""
+                val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+                
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val h = Math.abs(rect.bottom - rect.top)
                 val w = Math.abs(rect.right - rect.left)
                 
-                // 放宽图片特征限制：只要高度 > 100 且宽度占据大半个屏幕，就认为是帖子配图
-                // 新增：必须排除顶部的封面图或头像（Y坐标必须大于屏幕高度的 35%）
-                // 新增：高度不能超过屏幕高度的 80%，否则可能是误判了整个滚动容器
-                if (h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > screenHeight * 0.35 && rect.centerY() < screenHeight - 100 && h < screenHeight * 0.8) {
-                    imageNodes.add(node)
-                }
-            }
-            
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { dequeForImg.add(it) }
-            }
-        }
-        
-        if (imageNodes.isNotEmpty()) {
-            // 挑一个处于屏幕中央偏上的图片
-            val bestImageNode = imageNodes.minByOrNull { 
-                val r = Rect()
-                it.getBoundsInScreen(r)
-                Math.abs(r.centerY() - screenHeight / 2)
-            }
-            
-            if (bestImageNode != null) {
-                Log.i(TAG, "🎯 找到帖子图片，点击进入详情页")
-                currentState = State.WAITING
-                performClick(bestImageNode)
-                scope.launch {
-                    delay(2000) // 等待进入详情页
-                    currentState = State.CLICKING_SHARE_IN_DETAIL
-                    runCurrentStateLogic()
-                }
-                return
-            }
-        }
-        
-        while (dequeForImg.isNotEmpty()) {
-            val node = dequeForImg.removeFirst()
-            val className = node.className?.toString() ?: ""
-            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
-            
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            val h = Math.abs(rect.bottom - rect.top)
-            val w = Math.abs(rect.right - rect.left)
-            
-            // 图片特征：类名包含 Image，或者高宽都很大（>200），且文字较少，不在屏幕最顶端或最底端
-            val isImageClass = className.contains("Image", ignoreCase = true)
-            val isLargeMedia = h > 200 && w > screenWidth * 0.5
-            val hasLittleText = text.length < 50 && !text.contains("分享") && !text.contains("赞") && !text.contains("评论")
-            
-            if ((isImageClass || isLargeMedia) && hasLittleText) {
-                // 确保它在屏幕有效可视范围内，并且排除了顶部的封面大图（Y坐标必须大于屏幕高度的 35%）
-                // 增加高度上限限制，防止误认整个网页或巨大的背景容器为帖子图片
-                if (rect.centerY() > screenHeight * 0.35 && rect.centerY() < screenHeight - 200 && h < screenHeight * 0.8) {
-                    imageNodes.add(node)
-                }
-            }
-            
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { dequeForImg.add(it) }
-            }
-        }
-        
-        if (imageNodes.isNotEmpty()) {
-            // 选一个最靠中间的大图
-            val targetImage = imageNodes.minByOrNull { 
-                val r = Rect()
-                it.getBoundsInScreen(r)
-                // 优先选择屏幕上半部分（排除极顶端）的图片
-                Math.abs(r.centerY() - screenHeight * 0.4)
-            }
-            
-            if (targetImage != null) {
-                Log.i(TAG, "🎯 发现帖子图片，优先点击图片进入详情页...")
-                currentState = State.WAITING
-                performClick(targetImage)
+                // 图片特征：类名包含 Image，或者高宽都很大（>200），且文字较少，不在屏幕最顶端或最底端
+                val isImageClass = className.contains("Image", ignoreCase = true)
+                val isLargeMedia = h > 200 && w > screenWidth * 0.5
+                val hasLittleText = text.length < 50 && !text.contains("分享") && !text.contains("赞") && !text.contains("评论")
                 
-                scope.launch {
-                    // 等待页面加载
-                    delay(3000)
-                    currentState = State.CLICKING_SHARE_IN_DETAIL
-                    runCurrentStateLogic()
+                if ((isImageClass || isLargeMedia) && hasLittleText) {
+                    // 排除顶部头像和封面
+                    val isAvatarOrCover = rect.top < screenHeight * 0.25
+                    
+                    // 确保它在屏幕有效可视范围内，并且排除了顶部的封面大图（Y坐标必须大于屏幕高度的 35%）
+                    // 增加高度上限限制，防止误认整个网页或巨大的背景容器为帖子图片
+                    if (!isAvatarOrCover && rect.centerY() > screenHeight * 0.35 && rect.centerY() < screenHeight - 200 && h < screenHeight * 0.8) {
+                        imageNodes.add(node)
+                    }
                 }
-                return
+                
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { dequeForImg2.add(it) }
+                }
             }
+            
+            if (imageNodes.isNotEmpty()) {
+                // 选一个最靠中间的大图
+                val targetImage = imageNodes.minByOrNull { 
+                    val r = Rect()
+                    it.getBoundsInScreen(r)
+                    // 优先选择屏幕上半部分（排除极顶端）的图片
+                    Math.abs(r.centerY() - screenHeight * 0.4)
+                }
+                
+                if (targetImage != null) {
+                    Log.i(TAG, "🎯 发现帖子图片，优先点击图片进入详情页...")
+                    currentState = State.WAITING
+                    performClick(targetImage)
+                    
+                    scope.launch {
+                        delay(3000) // 等待页面加载
+                        
+                        val rootAfterClick = rootInActiveWindow
+                        if (rootAfterClick != null) {
+                            val isProfilePage = rootAfterClick.findAccessibilityNodeInfosByText("教育经历").isNotEmpty() || 
+                                              rootAfterClick.findAccessibilityNodeInfosByText("查看全部").isNotEmpty()
+                            
+                            if (isProfilePage) {
+                                Log.w(TAG, "误点进入了个人主页，执行返回并重新寻找帖子...")
+                                performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                                delay(1500)
+                                skipImageClickOnce = true
+                                currentState = State.FINDING_POST
+                                runCurrentStateLogic()
+                                return@launch
+                            }
+                        }
+                        
+                        currentState = State.CLICKING_SHARE_IN_DETAIL
+                        runCurrentStateLogic()
+                    }
+                    return
+                }
+            }
+        } else {
+            Log.i(TAG, "上次点击图片误入主页已返回，本次跳过图片点击，直接寻找分享按钮...")
+            skipImageClickOnce = false
         }
 
         // 2. 如果没有图片，降级使用普通寻找分享按钮逻辑

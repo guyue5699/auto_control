@@ -917,14 +917,14 @@ class FBAutomationService : AccessibilityService() {
         val height = displayMetrics.heightPixels
         val width = displayMetrics.widthPixels
         
-        // 滑动幅度加大：从屏幕 80% 底部滑到 20% 顶部，且为了防止触发状态栏，避开最边缘
-        // 滑动时间适当缩短到 1000ms，让滚动速度变快一点
+        // 恢复之前证明可用的中间区域滑动，只在屏幕最安全的中心区域操作
         val path = Path().apply {
-            moveTo(width / 2f, height * 0.8f)
-            lineTo(width / 2f, height * 0.2f)
+            moveTo(width / 2f, height * 0.6f)
+            lineTo(width / 2f, height * 0.4f)
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 1000))
+            // 恢复较慢的拖动时间，防止被系统作为惯性(Fling)拦截
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 1500))
             .build()
             
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
@@ -945,6 +945,8 @@ class FBAutomationService : AccessibilityService() {
         
         if (!dispatched) {
             Log.e(TAG, "dispatchGesture 返回 false，手势分发失败")
+            // 兜底方案：如果手势发送失败，尝试使用节点动作滚动
+            rootInActiveWindow?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
         }
     }
 

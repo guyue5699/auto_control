@@ -203,15 +203,20 @@ class FBAutomationService : AccessibilityService() {
         while (dequeForImg.isNotEmpty()) {
             val node = dequeForImg.removeFirst()
             
-            // 如果节点被标记为 Image 或者是含有大图的容器
-            if (node.className?.contains("Image") == true || node.contentDescription?.toString()?.contains("照片") == true || node.contentDescription?.toString()?.contains("photo", ignoreCase = true) == true) {
+            // 如果节点被标记为 Image 或者是含有大图的容器，或者是包含图片特征的节点
+            val contentDesc = node.contentDescription?.toString() ?: ""
+            val textStr = node.text?.toString() ?: ""
+            
+            if (node.className?.contains("Image") == true || 
+                contentDesc.contains("照片") || contentDesc.contains("photo", ignoreCase = true) ||
+                textStr.contains("照片") || textStr.contains("photo", ignoreCase = true)) {
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val h = Math.abs(rect.bottom - rect.top)
                 val w = Math.abs(rect.right - rect.left)
                 
-                // 图片特征：尺寸较大（通常占据屏幕很大面积），且不能是全屏大容器
-                if (h in 200..(screenHeight - 200) && w > screenWidth * 0.5 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100) {
+                // 放宽图片特征限制：只要高度 > 100 且宽度占据大半个屏幕，就认为是帖子配图
+                if (h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100) {
                     imageNodes.add(node)
                 }
             }

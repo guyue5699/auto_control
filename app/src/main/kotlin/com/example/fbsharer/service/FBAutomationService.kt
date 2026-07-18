@@ -536,19 +536,8 @@ class FBAutomationService : AccessibilityService() {
             },
             onNotFound = {
                 stateFailCount++
-                if (stateFailCount > 5) {
-                    Log.w(TAG, "长时间未找到‘分享到小组’，可能点错了，执行返回重新找帖子...")
-                    stateFailCount = 0
-                    currentState = State.WAITING
-                    performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                    scope.launch {
-                        delay(1500)
-                        currentState = State.FINDING_POST
-                        runCurrentStateLogic()
-                    }
-                } else {
-                    Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
-                }
+                Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
+                // 不再自动按返回键退出，如果卡在这里，就耐心等待或者人工介入
             }
         )
     }
@@ -915,21 +904,20 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun swipeUp() {
-        Log.i(TAG, "正在执行强制滚动手势 (缓慢模式)...")
-        val displayMetrics = resources.displayMetrics
-        val height = displayMetrics.heightPixels
-        val width = displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
         
-        // 恢复之前证明可用的中间区域滑动，只在屏幕最安全的中心区域操作
-        val path = Path().apply {
-            moveTo(width / 2f, height * 0.6f)
-            lineTo(width / 2f, height * 0.4f)
-        }
+        // 从屏幕底部 80% 快速滑动到顶部 20%
+        val path = Path()
+        path.moveTo(screenWidth / 2f, screenHeight * 0.8f)
+        path.lineTo(screenWidth / 2f, screenHeight * 0.2f)
+        
         val gesture = GestureDescription.Builder()
-            // 恢复较慢的拖动时间，防止被系统作为惯性(Fling)拦截
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 1500))
+            // 缩短滑动持续时间从 1500ms 到 500ms，让滚动速度变快
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
             .build()
             
+        Log.i(TAG, "正在执行快速滚动手势...")
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
@@ -943,13 +931,19 @@ class FBAutomationService : AccessibilityService() {
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription)
                 Log.e(TAG, "手势被系统拦截，请检查是否有覆盖层")
+                // 兜底方案：使用节点原生滚动
+                val rootNode = rootInActiveWindow
+                val scrollableNode = rootNode?.findAccessibilityNodeInfosByText("")?.find { it.isScrollable }
+                scrollableNode?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
             }
         }, null)
-        
+
         if (!dispatched) {
             Log.e(TAG, "dispatchGesture 返回 false，手势分发失败")
-            // 兜底方案：如果手势发送失败，尝试使用节点动作滚动
-            rootInActiveWindow?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            val rootNode = rootInActiveWindow
+            val scrollableNode = rootNode?.findAccessibilityNodeInfosByText("")?.find { it.isScrollable }
+            scrollableNode?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                ?: rootNode?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
         }
     }
 

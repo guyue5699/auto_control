@@ -33,7 +33,6 @@ class FBAutomationService : AccessibilityService() {
     private var lastScrollTime = 0L
     private var isRunning = false
     private var stateFailCount = 0
-    private var skipImageClickOnce = false
     private var targetBrowserPackage = "com.android.chrome"
     private val scope = CoroutineScope(Dispatchers.Main)
     

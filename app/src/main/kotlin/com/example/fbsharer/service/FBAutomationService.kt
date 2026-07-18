@@ -216,7 +216,8 @@ class FBAutomationService : AccessibilityService() {
                 val w = Math.abs(rect.right - rect.left)
                 
                 // 放宽图片特征限制：只要高度 > 100 且宽度占据大半个屏幕，就认为是帖子配图
-                if (h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100) {
+                // 新增：必须排除顶部的封面图或头像（Y坐标必须大于屏幕高度的 30%）
+                if (h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > screenHeight * 0.3 && rect.centerY() < screenHeight - 100) {
                     imageNodes.add(node)
                 }
             }
@@ -263,8 +264,8 @@ class FBAutomationService : AccessibilityService() {
             val hasLittleText = text.length < 50 && !text.contains("分享") && !text.contains("赞") && !text.contains("评论")
             
             if ((isImageClass || isLargeMedia) && hasLittleText) {
-                // 确保它在屏幕有效可视范围内
-                if (rect.centerY() > 200 && rect.centerY() < screenHeight - 200) {
+                // 确保它在屏幕有效可视范围内，并且排除了顶部的封面大图（Y坐标必须大于屏幕高度的 30%）
+                if (rect.centerY() > screenHeight * 0.3 && rect.centerY() < screenHeight - 200) {
                     imageNodes.add(node)
                 }
             }
@@ -284,12 +285,14 @@ class FBAutomationService : AccessibilityService() {
             
             if (targetImage != null) {
                 Log.i(TAG, "🎯 发现帖子图片，优先点击图片进入详情页...")
+                currentState = State.WAITING
                 performClick(targetImage)
                 
                 scope.launch {
                     // 等待页面加载
                     delay(3000)
                     currentState = State.CLICKING_SHARE_IN_DETAIL
+                    runCurrentStateLogic()
                 }
                 return
             }

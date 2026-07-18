@@ -33,6 +33,7 @@ class FBAutomationService : AccessibilityService() {
     private var lastScrollTime = 0L
     private var isRunning = false
     private var stateFailCount = 0
+    private var targetBrowserPackage = "com.android.chrome"
     private val scope = CoroutineScope(Dispatchers.Main)
     
     // 用于记录已经分享过的小组名称，防止重复点击
@@ -86,9 +87,15 @@ class FBAutomationService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (currentTask == null || currentState == State.IDLE || currentState == State.WAITING) return
         
-        // 【核心安全锁】检查当前是否还在浏览器里
+        // 【核心安全锁】检查当前是否还在目标浏览器里
         val currentPackage = event.packageName?.toString() ?: ""
-        if (currentPackage.isNotEmpty() && currentPackage != "com.android.chrome" && currentPackage != "com.google.android.apps.chrome") {
+        
+        // 允许系统UI（如下拉状态栏）和我们自己的App（启动过渡期），不做拦截
+        if (currentPackage == "com.android.systemui" || currentPackage == packageName) {
+            return
+        }
+        
+        if (currentPackage.isNotEmpty() && currentPackage != targetBrowserPackage) {
             Log.e(TAG, "🚨 严重警告：当前已脱离浏览器进入包 [$currentPackage]！立即挂起所有操作！")
             // 自动拉起浏览器，尝试恢复现场
             bringBrowserToFront()
@@ -105,11 +112,10 @@ class FBAutomationService : AccessibilityService() {
     private fun bringBrowserToFront() {
         if (currentState == State.WAITING) return
         currentState = State.WAITING
-        Log.i(TAG, "尝试重新唤起浏览器回到前台...")
+        Log.i(TAG, "尝试重新唤起浏览器 ($targetBrowserPackage) 回到前台...")
         scope.launch {
             try {
-                val intent = packageManager.getLaunchIntentForPackage("com.android.chrome") 
-                    ?: packageManager.getLaunchIntentForPackage("com.google.android.apps.chrome")
+                val intent = packageManager.getLaunchIntentForPackage(targetBrowserPackage)
                 if (intent != null) {
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                     startActivity(intent)
@@ -117,7 +123,7 @@ class FBAutomationService : AccessibilityService() {
                     Log.i(TAG, "已尝试恢复浏览器，退回到寻找帖子状态重试")
                     currentState = State.FINDING_POST
                 } else {
-                    Log.e(TAG, "无法找到浏览器包，停止任务")
+                    Log.e(TAG, "无法找到浏览器包: $targetBrowserPackage，停止任务")
                     currentState = State.IDLE
                 }
             } catch (e: Exception) {
@@ -158,11 +164,14 @@ class FBAutomationService : AccessibilityService() {
         )
         val discoveredBrowserPackages = pm.queryIntentActivities(baseIntent, 0)
             .mapNotNull { it.activityInfo?.packageName }
-            .filterNot { it == "com.google.android.googlequicksearchbox" }
+            .filterNot { it == "com.google.android.googlequicksearchbox" || it.contains("com.facebook.katana") || it.contains("com.facebook.lite") || it.contains("com.facebook.orca") }
             .distinct()
         val targetPkg = (preferredPackages + discoveredBrowserPackages).firstOrNull { packageName ->
             Intent(baseIntent).setPackage(packageName).resolveActivity(pm) != null
         }
+        
+        targetBrowserPackage = targetPkg ?: "com.android.chrome"
+        
         val launchIntent = if (targetPkg != null) {
             Log.i(TAG, "✅ 找到可用浏览器包名: $targetPkg")
             Intent(baseIntent).setPackage(targetPkg)

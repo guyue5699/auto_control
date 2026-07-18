@@ -241,6 +241,7 @@ class FBAutomationService : AccessibilityService() {
         Log.d(TAG, "开始扫描页面寻找分享按钮...")
         
         val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
         val shareKeywords = listOf("分享", "Share", "转发")
         var exactShareNode: AccessibilityNodeInfo? = null
         

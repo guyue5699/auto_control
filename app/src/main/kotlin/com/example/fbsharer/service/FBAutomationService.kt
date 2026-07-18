@@ -246,8 +246,8 @@ class FBAutomationService : AccessibilityService() {
         var exactShareNode: AccessibilityNodeInfo? = null
         
         // 我们直接使用你在详情页找纯图标那套逻辑！
-        // 收集屏幕上半部分以下（>30%）所有的疑似按钮节点
-        val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
+        // 收集屏幕上半部分以下（>25%）所有的疑似按钮节点
+        val candidateNodes = mutableListOf<AccessibilityNodeInfo>()
         val deque = ArrayDeque<AccessibilityNodeInfo>()
         deque.add(rootNode)
         
@@ -258,10 +258,10 @@ class FBAutomationService : AccessibilityService() {
             val h = Math.abs(rect.bottom - rect.top)
             val w = Math.abs(rect.right - rect.left)
             
-            // 只要在屏幕 30% 以下区域，并且具有一定大小的独立节点
-            if (rect.centerY() > screenHeight * 0.3 && h in 20..200 && w in 20..(screenWidth / 2)) {
+            // 只要在屏幕 25% 以下区域，并且具有一定大小的独立节点
+            if (rect.centerY() > screenHeight * 0.25 && h in 20..200 && w in 20..(screenWidth / 2)) {
                 if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
-                    bottomNodes.add(node)
+                    candidateNodes.add(node)
                 }
             }
             
@@ -281,21 +281,22 @@ class FBAutomationService : AccessibilityService() {
         var validShareNode = exactShareNode
 
         // 2. 如果没有带标签的，启动“结构分析法”（找一排按钮的倒数第二个）
-        if (validShareNode == null && bottomNodes.isNotEmpty()) {
+        if (validShareNode == null && candidateNodes.isNotEmpty()) {
             // 按照 Y 坐标分组，找到同一水平线上的按钮排
-            val rows = bottomNodes.groupBy { 
+            val rows = candidateNodes.groupBy { 
                 val r = Rect()
                 it.getBoundsInScreen(r)
-                r.centerY() / 50 // 每50像素算作同一行
-            }.values.filter { it.size >= 3 } // 主页的底栏通常至少有3个按钮（赞、评论、分享）
+                r.centerY() / 80 // 每80像素算作同一行，增加容错度
+            }.values.filter { it.size >= 2 } // 只要有2个以上的同行按钮（比如赞、分享）就算数
             
             if (rows.isNotEmpty()) {
-                // 取屏幕中偏下的一排按钮，排除太靠近底部的系统导航栏
+                // 【关键修复】：取屏幕中“最靠上”的一排按钮（即当前屏幕上第一个帖子的底栏）
+                // 之前写成了最靠下，导致完美错过了屏幕中间的按钮！
                 val targetRow = rows.filter { row ->
                     val r = Rect()
                     row[0].getBoundsInScreen(r)
-                    r.centerY() < screenHeight - 150
-                }.maxByOrNull { row ->
+                    r.centerY() < screenHeight - 150 // 排除底部的系统导航栏和下载广告条
+                }.minByOrNull { row ->
                     val r = Rect()
                     row[0].getBoundsInScreen(r)
                     r.centerY()
@@ -312,12 +313,11 @@ class FBAutomationService : AccessibilityService() {
                     // 过滤掉最右侧可能是“三个点”或“更多”的按钮
                     val filteredRow = sortedRow.filter { node ->
                         val desc = node.contentDescription?.toString() ?: ""
-                        val className = node.className?.toString() ?: ""
                         !desc.contains("更多") && !desc.contains("More", true)
                     }
                     
-                    if (filteredRow.size >= 2) {
-                        // 取过滤后的最右侧一个（或者倒数第二个）
+                    if (filteredRow.isNotEmpty()) {
+                        // 取过滤后的最右侧一个（必定是分享箭头）
                         validShareNode = filteredRow.last()
                         Log.d(TAG, "🎯 主页：通过结构位置找到分享图标")
                     }

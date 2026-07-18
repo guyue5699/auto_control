@@ -240,62 +240,88 @@ class FBAutomationService : AccessibilityService() {
         
         Log.d(TAG, "开始扫描页面寻找分享按钮...")
         
-        val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        
-        // 直接寻找分享按钮，不再尝试点击图片进入详情页，防止误触各种奇怪的图片
-        Log.d(TAG, "尝试直接寻找分享按钮...")
         val shareKeywords = listOf("分享", "Share", "转发")
-        val shareNodes = mutableListOf<AccessibilityNodeInfo>()
+        var exactShareNode: AccessibilityNodeInfo? = null
         
-        // 1. 尝试通过文本寻找 (有些用户界面会有文字)
-        for (keyword in shareKeywords) {
-            shareNodes.addAll(rootNode.findAccessibilityNodeInfosByText(keyword))
-        }
-        Log.d(TAG, "通过文本找到节点数量: ${shareNodes.size}")
-
-        // 2. 尝试通过 contentDescription (隐藏标签) 识别
-        if (shareNodes.isEmpty()) {
-            findNodesByDescription(rootNode, shareKeywords, shareNodes)
-            Log.d(TAG, "通过描述找到节点数量: ${shareNodes.size}")
-        }
-
-        // 3. 尝试通过结构化特征识别 (针对纯图标，找一排按钮里最右侧的那个)
-        if (shareNodes.isEmpty()) {
-            findShareByStructure(rootNode, shareNodes)
-            Log.d(TAG, "通过结构化找到节点数量: ${shareNodes.size}")
-        }
-
-        // 过滤并锁定目标
-        val validShareNode = shareNodes.find { node ->
+        // 我们直接使用你在详情页找纯图标那套逻辑！
+        // 收集屏幕上半部分以下（>30%）所有的疑似按钮节点
+        val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(rootNode)
+        
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
             val rect = Rect()
             node.getBoundsInScreen(rect)
+            val h = Math.abs(rect.bottom - rect.top)
+            val w = Math.abs(rect.right - rect.left)
             
-            // 修复 Rect 异常逻辑：如果 bottom < top，说明坐标系可能有误，取绝对高度
-            val height = if (rect.bottom > rect.top) rect.bottom - rect.top else rect.top - rect.bottom
-            
-            // 过滤掉文字是 Reels / 全部 / 照片 / 签到 / 生活纪事 / 更多 的误判节点
-            val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
-            if (text.contains("Reels", ignoreCase = true) || 
-                text.contains("照片") || 
-                text.contains("全部") ||
-                text.contains("签到") ||
-                text.contains("生活纪") ||
-                text.contains("更多") ||
-                text.contains("Photos", ignoreCase = true) ||
-                text.contains("All", ignoreCase = true) ||
-                text.contains("Check in", ignoreCase = true) ||
-                text.contains("Life event", ignoreCase = true) ||
-                text.contains("More", ignoreCase = true)) {
-                return@find false
+            // 只要在屏幕 30% 以下区域，并且具有一定大小的独立节点
+            if (rect.centerY() > screenHeight * 0.3 && h in 20..200 && w in 20..(screenWidth / 2)) {
+                if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
+                    bottomNodes.add(node)
+                }
             }
             
-            // 只要高度有效（且不过大，防止误点整个图片/帖子容器）且中心点在屏幕内
-            // 并且过滤掉屏幕最上方 25% 区域的假按钮
-            val isVisible = height in 10..300 && rect.centerY() > screenHeight * 0.25 && rect.centerY() < screenHeight - 100
+            // 顺便找找有没有原生的带“分享”标签的按钮
+            val contentDesc = node.contentDescription?.toString() ?: ""
+            val textStr = node.text?.toString() ?: ""
+            if (shareKeywords.any { contentDesc.contains(it, ignoreCase = true) || textStr.contains(it, ignoreCase = true) }) {
+                exactShareNode = node
+            }
             
-            if (!isVisible) Log.v(TAG, "跳过无效、过大或屏幕外节点: $rect (Height: $height)")
-            isVisible
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
+        }
+
+        // 1. 优先使用带标签的节点
+        var validShareNode = exactShareNode
+
+        // 2. 如果没有带标签的，启动“结构分析法”（找一排按钮的倒数第二个）
+        if (validShareNode == null && bottomNodes.isNotEmpty()) {
+            // 按照 Y 坐标分组，找到同一水平线上的按钮排
+            val rows = bottomNodes.groupBy { 
+                val r = Rect()
+                it.getBoundsInScreen(r)
+                r.centerY() / 50 // 每50像素算作同一行
+            }.values.filter { it.size >= 3 } // 主页的底栏通常至少有3个按钮（赞、评论、分享）
+            
+            if (rows.isNotEmpty()) {
+                // 取屏幕中偏下的一排按钮，排除太靠近底部的系统导航栏
+                val targetRow = rows.filter { row ->
+                    val r = Rect()
+                    row[0].getBoundsInScreen(r)
+                    r.centerY() < screenHeight - 150
+                }.maxByOrNull { row ->
+                    val r = Rect()
+                    row[0].getBoundsInScreen(r)
+                    r.centerY()
+                }
+                
+                if (targetRow != null) {
+                    // 从左到右排序
+                    val sortedRow = targetRow.sortedBy { 
+                        val r = Rect()
+                        it.getBoundsInScreen(r)
+                        r.left 
+                    }
+                    
+                    // 过滤掉最右侧可能是“三个点”或“更多”的按钮
+                    val filteredRow = sortedRow.filter { node ->
+                        val desc = node.contentDescription?.toString() ?: ""
+                        val className = node.className?.toString() ?: ""
+                        !desc.contains("更多") && !desc.contains("More", true)
+                    }
+                    
+                    if (filteredRow.size >= 2) {
+                        // 取过滤后的最右侧一个（或者倒数第二个）
+                        validShareNode = filteredRow.last()
+                        Log.d(TAG, "🎯 主页：通过结构位置找到分享图标")
+                    }
+                }
+            }
         }
 
         if (validShareNode != null) {

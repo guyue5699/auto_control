@@ -252,12 +252,17 @@ class FBAutomationService : AccessibilityService() {
                 val node = dequeForImg.removeFirst()
                 
                 // 如果节点被标记为 Image 或者是含有大图的容器，或者是包含图片特征的节点
-                val contentDesc = node.contentDescription?.toString() ?: ""
-                val textStr = node.text?.toString() ?: ""
-                
-                if (node.className?.contains("Image") == true || 
-                    contentDesc.contains("照片") || contentDesc.contains("photo", ignoreCase = true) ||
-                    textStr.contains("照片") || textStr.contains("photo", ignoreCase = true)) {
+            val contentDesc = node.contentDescription?.toString() ?: ""
+            val textStr = node.text?.toString() ?: ""
+            
+            // 排除个人主页特有的操作按钮（如：编辑资料、添加快拍等）
+            val isProfileAction = textStr.contains("编辑资料") || contentDesc.contains("编辑资料") ||
+                                  textStr.contains("Edit profile", true) || contentDesc.contains("Edit profile", true) ||
+                                  textStr.contains("添加快拍") || contentDesc.contains("添加快拍")
+            
+            if (!isProfileAction && (node.className?.contains("Image") == true || 
+                contentDesc.contains("照片") || contentDesc.contains("photo", ignoreCase = true) ||
+                textStr.contains("照片") || textStr.contains("photo", ignoreCase = true))) {
                     val rect = Rect()
                     node.getBoundsInScreen(rect)
                     val h = Math.abs(rect.bottom - rect.top)
@@ -319,11 +324,16 @@ class FBAutomationService : AccessibilityService() {
                 val w = Math.abs(rect.right - rect.left)
                 
                 // 图片特征：类名包含 Image，或者高宽都很大（>200），且文字较少，不在屏幕最顶端或最底端
-                val isImageClass = className.contains("Image", ignoreCase = true)
-                val isLargeMedia = h > 200 && w > screenWidth * 0.5
-                val hasLittleText = text.length < 50 && !text.contains("分享") && !text.contains("赞") && !text.contains("评论")
-                
-                if ((isImageClass || isLargeMedia) && hasLittleText) {
+            val isImageClass = className.contains("Image", ignoreCase = true)
+            val isLargeMedia = h > 200 && w > screenWidth * 0.5
+            
+            // 必须排除常见的按钮文字，防止误把宽大的按钮当成图片
+            val hasLittleText = text.length < 50 && 
+                                !text.contains("分享") && !text.contains("赞") && !text.contains("评论") &&
+                                !text.contains("编辑资料") && !text.contains("Edit profile", true) &&
+                                !text.contains("添加快拍") && !text.contains("Add to story", true)
+            
+            if ((isImageClass || isLargeMedia) && hasLittleText) {
                     // 排除顶部头像和封面
                     val isAvatarOrCover = rect.top < screenHeight * 0.25
                     

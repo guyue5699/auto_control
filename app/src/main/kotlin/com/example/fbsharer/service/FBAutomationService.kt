@@ -408,83 +408,64 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickShareInDetail() {
-        Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享按钮...")
+        Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享图标（已禁用文字点击）...")
         val screenHeight = resources.displayMetrics.heightPixels
         val screenWidth = resources.displayMetrics.widthPixels
-        val detailShareKeywords = listOf("分享", "Share", "转发")
         
-        findTextByOCRAndClick(
-            keywords = detailShareKeywords,
-            checkCondition = { rect ->
-                // 确保它在屏幕下半部分，且偏右
-                rect.centerY() > screenHeight * 0.6 && rect.centerX() > screenWidth * 0.5
-            },
-            onSuccess = {
-                currentState = State.WAITING
-                scope.launch {
-                    delay(1500) // 等待分享菜单动画完全弹出
-                    currentState = State.OPENING_SHARE_MENU
-                    runCurrentStateLogic()
+        val rootNode = rootInActiveWindow ?: return
+        
+        // 收集屏幕最下方（>80%）所有的疑似按钮节点
+        val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
+        val deque = ArrayDeque<AccessibilityNodeInfo>()
+        deque.add(rootNode)
+        
+        while (deque.isNotEmpty()) {
+            val node = deque.removeFirst()
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val h = Math.abs(rect.bottom - rect.top)
+            val w = Math.abs(rect.right - rect.left)
+            
+            // 只要在屏幕最下方 20% 区域，并且具有一定大小的独立节点
+            if (rect.centerY() > screenHeight * 0.8 && h in 20..300 && w in 20..(screenWidth / 2)) {
+                // 如果节点可点击，或者是图片/按钮容器
+                if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
+                    bottomNodes.add(node)
                 }
-            },
-            onNotFound = {
-                Log.v(TAG, "OCR 未发现分享文字，可能只有图标，启动空间位置探测降级方案...")
-                val rootNode = rootInActiveWindow ?: return@findTextByOCRAndClick
-                
-                // 收集屏幕最下方（>80%）所有的疑似按钮节点
-                val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
-                val deque = ArrayDeque<AccessibilityNodeInfo>()
-                deque.add(rootNode)
-                
-                while (deque.isNotEmpty()) {
-                    val node = deque.removeFirst()
-                    val rect = Rect()
-                    node.getBoundsInScreen(rect)
-                    val h = Math.abs(rect.bottom - rect.top)
-                    val w = Math.abs(rect.right - rect.left)
-                    
-                    // 只要在屏幕最下方 20% 区域，并且具有一定大小的独立节点
-                    if (rect.centerY() > screenHeight * 0.8 && h in 20..300 && w in 20..(screenWidth / 2)) {
-                        // 如果节点可点击，或者是图片/按钮容器
-                        if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
-                            bottomNodes.add(node)
-                        }
-                    }
-                    
-                    for (i in 0 until node.childCount) {
-                        node.getChild(i)?.let { deque.add(it) }
-                    }
-                }
-                
-                if (bottomNodes.isNotEmpty()) {
-                    // 在底部的所有节点中，找到最靠右的那一个（centerX 最大）
-                    val rightMostNode = bottomNodes.maxByOrNull { 
-                        val r = Rect()
-                        it.getBoundsInScreen(r)
-                        r.centerX() 
-                    }
-                    
-                    if (rightMostNode != null) {
-                        val r = Rect()
-                        rightMostNode.getBoundsInScreen(r)
-                        // 确保它真的在右半边
-                        if (r.centerX() > screenWidth * 0.6) {
-                            Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享图标，点击展开菜单")
-                            currentState = State.WAITING
-                            performClick(rightMostNode)
-                            scope.launch {
-                                delay(1500) // 等待分享菜单动画完全弹出
-                                currentState = State.OPENING_SHARE_MENU
-                                runCurrentStateLogic()
-                            }
-                            return@findTextByOCRAndClick
-                        }
-                    }
-                }
-                
-                Log.v(TAG, "详情页中暂未发现分享按钮或图标，等待...")
             }
-        )
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { deque.add(it) }
+            }
+        }
+        
+        if (bottomNodes.isNotEmpty()) {
+            // 在底部的所有节点中，找到最靠右的那一个（centerX 最大）
+            val rightMostNode = bottomNodes.maxByOrNull { 
+                val r = Rect()
+                it.getBoundsInScreen(r)
+                r.centerX() 
+            }
+            
+            if (rightMostNode != null) {
+                val r = Rect()
+                rightMostNode.getBoundsInScreen(r)
+                // 确保它真的在右半边
+                if (r.centerX() > screenWidth * 0.6) {
+                    Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享图标，点击展开菜单")
+                    currentState = State.WAITING
+                    performClick(rightMostNode)
+                    scope.launch {
+                        delay(1500) // 等待分享菜单动画完全弹出
+                        currentState = State.OPENING_SHARE_MENU
+                        runCurrentStateLogic()
+                    }
+                    return
+                }
+            }
+        }
+        
+        Log.v(TAG, "详情页中暂未发现分享图标，等待...")
     }
 
     private fun findNodesByDescription(root: AccessibilityNodeInfo, keywords: List<String>, result: MutableList<AccessibilityNodeInfo>) {

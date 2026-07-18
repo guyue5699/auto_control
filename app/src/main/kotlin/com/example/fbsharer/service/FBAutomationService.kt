@@ -90,8 +90,8 @@ class FBAutomationService : AccessibilityService() {
         // 【核心安全锁】检查当前是否还在目标浏览器里
         val currentPackage = event.packageName?.toString() ?: ""
         
-        // 允许系统UI（如下拉状态栏）和我们自己的App（启动过渡期），不做拦截
-        if (currentPackage == "com.android.systemui" || currentPackage == packageName) {
+        // 允许系统UI（如下拉状态栏）、系统弹窗（android）和我们自己的App（启动过渡期），不做拦截
+        if (currentPackage == "com.android.systemui" || currentPackage == "android" || currentPackage == packageName) {
             return
         }
         
@@ -130,6 +130,7 @@ class FBAutomationService : AccessibilityService() {
         Log.i(TAG, "尝试重新唤起浏览器 ($targetBrowserPackage) 回到前台...")
         scope.launch {
             try {
+                // 不再重新发送带 URL 的 Intent (避免刷新和新建标签页)，只唤起该应用的启动 Activity
                 val intent = packageManager.getLaunchIntentForPackage(targetBrowserPackage)
                 if (intent != null) {
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)

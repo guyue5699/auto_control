@@ -408,13 +408,16 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun findAndClickShareInDetail() {
-        Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享图标（已禁用文字点击）...")
+        Log.d(TAG, "已进入帖子详情页，开始寻找底部右侧分享图标（排除三个点）...")
         val screenHeight = resources.displayMetrics.heightPixels
         val screenWidth = resources.displayMetrics.widthPixels
         
         val rootNode = rootInActiveWindow ?: return
         
-        // 收集屏幕最下方（>80%）所有的疑似按钮节点
+        val detailShareKeywords = listOf("分享", "Share", "转发")
+        var exactShareNode: AccessibilityNodeInfo? = null
+        
+        // 收集屏幕最下方（>50%）所有的疑似按钮节点
         val bottomNodes = mutableListOf<AccessibilityNodeInfo>()
         val deque = ArrayDeque<AccessibilityNodeInfo>()
         deque.add(rootNode)
@@ -426,11 +429,28 @@ class FBAutomationService : AccessibilityService() {
             val h = Math.abs(rect.bottom - rect.top)
             val w = Math.abs(rect.right - rect.left)
             
-            // 只要在屏幕最下方 20% 区域，并且具有一定大小的独立节点
-            if (rect.centerY() > screenHeight * 0.8 && h in 20..300 && w in 20..(screenWidth / 2)) {
-                // 如果节点可点击，或者是图片/按钮容器
+            // 只要在屏幕下半部分 50% 区域，并且具有一定大小的独立节点
+            if (rect.centerY() > screenHeight * 0.5 && h in 20..200 && w in 20..(screenWidth / 2)) {
+                // 收集所有可能是图标的节点（策略2兜底）
                 if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
                     bottomNodes.add(node)
+                }
+                
+                // 策略1：检查是否具有“分享”属性 (隐藏的 accessibility label)
+                val text = node.text?.toString() ?: ""
+                val desc = node.contentDescription?.toString() ?: ""
+                
+                // 必须是精确匹配或者极短的文本，防止匹配到帖子正文里的长篇大论
+                val isShareKeyword = detailShareKeywords.any { 
+                    text.equals(it, true) || desc.equals(it, true) ||
+                    (text.contains(it, true) && text.length < 15) ||
+                    (desc.contains(it, true) && desc.length < 15)
+                }
+                
+                if (isShareKeyword) {
+                    if (exactShareNode == null || rect.centerY() > exactShareNode!!.boundsInScreen.centerY()) {
+                        exactShareNode = node
+                    }
                 }
             }
             
@@ -439,24 +459,61 @@ class FBAutomationService : AccessibilityService() {
             }
         }
         
+        if (exactShareNode != null) {
+            Log.d(TAG, "🎯 详情页：通过无障碍属性(Aria-Label)精确找到分享图标")
+            currentState = State.WAITING
+            performClick(exactShareNode)
+            scope.launch {
+                delay(1500)
+                currentState = State.OPENING_SHARE_MENU
+                runCurrentStateLogic()
+            }
+            return
+        }
+        
+        // 策略2：如果图标没有属性（纯盲猜），我们要排除最右侧的“三个点”
         if (bottomNodes.isNotEmpty()) {
-            // 在底部的所有节点中，找到最靠右的那一个（centerX 最大）
-            val rightMostNode = bottomNodes.maxByOrNull { 
-                val r = Rect()
-                it.getBoundsInScreen(r)
-                r.centerX() 
+            // 过滤掉明确是“更多”、“三个点”的节点
+            val filteredNodes = bottomNodes.filter { 
+                val text = it.text?.toString() ?: ""
+                val desc = it.contentDescription?.toString() ?: ""
+                !text.contains("更多") && !desc.contains("更多") &&
+                !text.contains("More", true) && !desc.contains("More", true)
             }
             
-            if (rightMostNode != null) {
-                val r = Rect()
-                rightMostNode.getBoundsInScreen(r)
-                // 确保它真的在右半边
-                if (r.centerX() > screenWidth * 0.6) {
-                    Log.d(TAG, "🎯 详情页：通过位置找到最右侧按钮，判定为分享图标，点击展开菜单")
+            if (filteredNodes.isNotEmpty()) {
+                // 取最底部的一排节点 (Y坐标相差在40像素以内的算同一排)
+                val maxY = filteredNodes.maxOf { it.boundsInScreen.centerY() }
+                val bottomRow = filteredNodes.filter { Math.abs(it.boundsInScreen.centerY() - maxY) < 40 }
+                
+                // 按 X 坐标从左到右排序，并去重（防止同一个按钮的不同图层被多次计算）
+                val sortedNodes = bottomRow.sortedBy { it.boundsInScreen.centerX() }
+                val uniqueRow = mutableListOf<AccessibilityNodeInfo>()
+                for (node in sortedNodes) {
+                    if (uniqueRow.isEmpty() || Math.abs(node.boundsInScreen.centerX() - uniqueRow.last().boundsInScreen.centerX()) > 50) {
+                        uniqueRow.add(node)
+                    }
+                }
+                
+                var targetNode: AccessibilityNodeInfo? = null
+                
+                // Facebook 标准底部栏：[赞] [评论] [分享] [发送/WhatsApp]
+                if (uniqueRow.size >= 3) {
+                    // 分享通常是第 3 个
+                    targetNode = uniqueRow[2]
+                } else if (uniqueRow.size == 2) {
+                    // 如果只有2个，选第2个
+                    targetNode = uniqueRow[1]
+                } else if (uniqueRow.isNotEmpty()) {
+                    targetNode = uniqueRow.last()
+                }
+                
+                if (targetNode != null) {
+                    Log.d(TAG, "🎯 详情页：通过结构位置找到分享图标（已排除三个点）")
                     currentState = State.WAITING
-                    performClick(rightMostNode)
+                    performClick(targetNode)
                     scope.launch {
-                        delay(1500) // 等待分享菜单动画完全弹出
+                        delay(1500)
                         currentState = State.OPENING_SHARE_MENU
                         runCurrentStateLogic()
                     }

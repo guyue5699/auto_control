@@ -536,8 +536,15 @@ class FBAutomationService : AccessibilityService() {
             },
             onNotFound = {
                 stateFailCount++
-                Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，等待弹出...")
-                // 不再自动按返回键退出，如果卡在这里，就耐心等待或者人工介入
+                Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，尝试向上滚动菜单寻找...")
+                // 如果没找到，很可能是菜单太长被折叠在下面了，执行滚动操作
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastScrollTime > 2000) {
+                    lastScrollTime = currentTime
+                    scope.launch {
+                        swipeUp()
+                    }
+                }
             }
         )
     }

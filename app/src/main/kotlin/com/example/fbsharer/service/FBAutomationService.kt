@@ -243,9 +243,8 @@ class FBAutomationService : AccessibilityService() {
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
         
-        if (!skipImageClickOnce) {
-            // 1. 优先寻找帖子里的图片并点击进入详情页
-            val dequeForImg = ArrayDeque<AccessibilityNodeInfo>()
+        // 1. 优先寻找帖子里的图片并点击进入详情页
+        val dequeForImg = ArrayDeque<AccessibilityNodeInfo>()
             dequeForImg.add(rootNode)
             
             while (dequeForImg.isNotEmpty()) {
@@ -297,24 +296,6 @@ class FBAutomationService : AccessibilityService() {
                     performClick(bestImageNode)
                     scope.launch {
                         delay(3000) // 增加等待时间，防止网络慢导致判断过早
-                        
-                        // 检查是否误点了头像/封面，跳到了个人主页（特征：有“教育经历”、“查看全部好友”）
-                        val rootAfterClick = rootInActiveWindow
-                        if (rootAfterClick != null) {
-                            val isProfilePage = rootAfterClick.findAccessibilityNodeInfosByText("教育经历").isNotEmpty() || 
-                                              rootAfterClick.findAccessibilityNodeInfosByText("查看全部").isNotEmpty()
-                            
-                            if (isProfilePage) {
-                                Log.w(TAG, "误点进入了个人主页，执行返回并重新寻找帖子...")
-                                performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                                delay(1500)
-                                skipImageClickOnce = true
-                                currentState = State.FINDING_POST
-                                runCurrentStateLogic()
-                                return@launch
-                            }
-                        }
-                        
                         currentState = State.CLICKING_SHARE_IN_DETAIL
                         runCurrentStateLogic()
                     }
@@ -373,34 +354,13 @@ class FBAutomationService : AccessibilityService() {
                     
                     scope.launch {
                         delay(3000) // 等待页面加载
-                        
-                        val rootAfterClick = rootInActiveWindow
-                        if (rootAfterClick != null) {
-                            val isProfilePage = rootAfterClick.findAccessibilityNodeInfosByText("教育经历").isNotEmpty() || 
-                                              rootAfterClick.findAccessibilityNodeInfosByText("查看全部").isNotEmpty()
-                            
-                            if (isProfilePage) {
-                                Log.w(TAG, "误点进入了个人主页，执行返回并重新寻找帖子...")
-                                performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                                delay(1500)
-                                skipImageClickOnce = true
-                                currentState = State.FINDING_POST
-                                runCurrentStateLogic()
-                                return@launch
-                            }
-                        }
-                        
                         currentState = State.CLICKING_SHARE_IN_DETAIL
                         runCurrentStateLogic()
                     }
                     return
                 }
             }
-        } else {
-            Log.i(TAG, "上次点击图片误入主页已返回，本次跳过图片点击，直接寻找分享按钮...")
-            skipImageClickOnce = false
-        }
-
+        
         // 2. 如果没有图片，降级使用普通寻找分享按钮逻辑
         Log.d(TAG, "未发现帖子图片，尝试直接寻找分享按钮...")
         val shareKeywords = listOf("分享", "Share", "转发")

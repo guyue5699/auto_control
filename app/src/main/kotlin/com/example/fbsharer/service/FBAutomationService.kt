@@ -194,6 +194,20 @@ class FBAutomationService : AccessibilityService() {
             return
         }
         
+        // 如果当前是第一个要分享的小组，先尝试跳过主页的干扰区域
+        if (currentGroupIndex == 0 && sharedGroupNames.isEmpty()) {
+            val isFirstTime = lastScrollTime == 0L
+            if (isFirstTime) {
+                Log.d(TAG, "首次进入主页，执行初始化滚动以跳过封面区域...")
+                lastScrollTime = System.currentTimeMillis()
+                scope.launch {
+                    delay(2000) // 等待页面加载
+                    swipeUp()
+                }
+                return
+            }
+        }
+        
         Log.d(TAG, "开始扫描页面寻找帖子图片或分享按钮...")
         
         // 1. 优先寻找帖子里的图片并点击进入详情页
@@ -283,10 +297,11 @@ class FBAutomationService : AccessibilityService() {
         
         if (imageNodes.isNotEmpty()) {
             // 选一个最靠中间的大图
-            val targetImage = imageNodes.maxByOrNull { 
+            val targetImage = imageNodes.minByOrNull { 
                 val r = Rect()
                 it.getBoundsInScreen(r)
-                Math.abs(r.bottom - r.top) * Math.abs(r.right - r.left) 
+                // 优先选择屏幕上半部分（排除极顶端）的图片
+                Math.abs(r.centerY() - screenHeight * 0.4)
             }
             
             if (targetImage != null) {

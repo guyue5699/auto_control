@@ -77,10 +77,43 @@ class FBAutomationService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (currentTask == null || currentState == State.IDLE || currentState == State.WAITING) return
         
+        // 【核心安全锁】检查当前是否还在浏览器里
+        val currentPackage = event.packageName?.toString() ?: ""
+        if (currentPackage.isNotEmpty() && currentPackage != "com.android.chrome" && currentPackage != "com.google.android.apps.chrome") {
+            Log.e(TAG, "🚨 严重警告：当前已脱离浏览器进入包 [$currentPackage]！立即挂起所有操作！")
+            // 自动拉起浏览器，尝试恢复现场
+            bringBrowserToFront()
+            return
+        }
+        
         // 响应窗口变化事件，立即执行逻辑
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || 
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             runCurrentStateLogic()
+        }
+    }
+    
+    private fun bringBrowserToFront() {
+        if (currentState == State.WAITING) return
+        currentState = State.WAITING
+        Log.i(TAG, "尝试重新唤起浏览器回到前台...")
+        scope.launch {
+            try {
+                val intent = packageManager.getLaunchIntentForPackage("com.android.chrome") 
+                    ?: packageManager.getLaunchIntentForPackage("com.google.android.apps.chrome")
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    startActivity(intent)
+                    delay(2000)
+                    Log.i(TAG, "已尝试恢复浏览器，退回到寻找帖子状态重试")
+                    currentState = State.FINDING_POST
+                } else {
+                    Log.e(TAG, "无法找到浏览器包，停止任务")
+                    currentState = State.IDLE
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "恢复浏览器失败: ${e.message}")
+            }
         }
     }
 
@@ -166,6 +199,48 @@ class FBAutomationService : AccessibilityService() {
         
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
+        
+        while (dequeForImg.isNotEmpty()) {
+            val node = dequeForImg.removeFirst()
+            
+            // 如果节点被标记为 Image 或者是含有大图的容器
+            if (node.className?.contains("Image") == true || node.contentDescription?.toString()?.contains("照片") == true || node.contentDescription?.toString()?.contains("photo", ignoreCase = true) == true) {
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val h = Math.abs(rect.bottom - rect.top)
+                val w = Math.abs(rect.right - rect.left)
+                
+                // 图片特征：尺寸较大（通常占据屏幕很大面积），且不能是全屏大容器
+                if (h in 200..(screenHeight - 200) && w > screenWidth * 0.5 && rect.centerY() > 100 && rect.centerY() < screenHeight - 100) {
+                    imageNodes.add(node)
+                }
+            }
+            
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { dequeForImg.add(it) }
+            }
+        }
+        
+        if (imageNodes.isNotEmpty()) {
+            // 挑一个处于屏幕中央偏上的图片
+            val bestImageNode = imageNodes.minByOrNull { 
+                val r = Rect()
+                it.getBoundsInScreen(r)
+                Math.abs(r.centerY() - screenHeight / 2)
+            }
+            
+            if (bestImageNode != null) {
+                Log.i(TAG, "🎯 找到帖子图片，点击进入详情页")
+                currentState = State.WAITING
+                performClick(bestImageNode)
+                scope.launch {
+                    delay(2000) // 等待进入详情页
+                    currentState = State.CLICKING_SHARE_IN_DETAIL
+                    runCurrentStateLogic()
+                }
+                return
+            }
+        }
         
         while (dequeForImg.isNotEmpty()) {
             val node = dequeForImg.removeFirst()
@@ -268,6 +343,7 @@ class FBAutomationService : AccessibilityService() {
 
         if (validShareNode != null) {
             Log.i(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
+            stateFailCount = 0
             currentState = State.WAITING
             performClick(validShareNode)
             scope.launch {

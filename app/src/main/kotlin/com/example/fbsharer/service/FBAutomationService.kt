@@ -40,8 +40,12 @@ class FBAutomationService : AccessibilityService() {
         scope.launch {
             while (isRunning) {
                 if (currentTask != null && currentState != State.IDLE && currentState != State.NAVIGATING && currentState != State.WAITING) {
-                    Log.v(TAG, "心跳检查: 当前状态 $currentState")
-                    runCurrentStateLogic()
+                    val currentTime = System.currentTimeMillis()
+                    // 仅当距上次滚动超过 2 秒时，才触发心跳检测（防止滚动期间被心跳打断或并发触发）
+                    if (currentTime - lastScrollTime > 2000) {
+                        Log.v(TAG, "心跳检查: 当前状态 $currentState")
+                        runCurrentStateLogic()
+                    }
                 }
                 delay(2000) // 每 2 秒强制检查一次
             }
@@ -182,9 +186,9 @@ class FBAutomationService : AccessibilityService() {
             Log.w(TAG, "无法获取当前窗口根节点，尝试主动滑动触发页面刷新")
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastScrollTime > 2000) {
+                lastScrollTime = currentTime
                 scope.launch {
                     swipeUp()
-                    lastScrollTime = System.currentTimeMillis()
                 }
             }
             return
@@ -216,8 +220,9 @@ class FBAutomationService : AccessibilityService() {
                 val w = Math.abs(rect.right - rect.left)
                 
                 // 放宽图片特征限制：只要高度 > 100 且宽度占据大半个屏幕，就认为是帖子配图
-                // 新增：必须排除顶部的封面图或头像（Y坐标必须大于屏幕高度的 30%）
-                if (h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > screenHeight * 0.3 && rect.centerY() < screenHeight - 100) {
+                // 新增：必须排除顶部的封面图或头像（Y坐标必须大于屏幕高度的 35%）
+                // 新增：高度不能超过屏幕高度的 80%，否则可能是误判了整个滚动容器
+                if (h in 100..(screenHeight - 100) && w > screenWidth * 0.4 && rect.centerY() > screenHeight * 0.35 && rect.centerY() < screenHeight - 100 && h < screenHeight * 0.8) {
                     imageNodes.add(node)
                 }
             }
@@ -264,8 +269,9 @@ class FBAutomationService : AccessibilityService() {
             val hasLittleText = text.length < 50 && !text.contains("分享") && !text.contains("赞") && !text.contains("评论")
             
             if ((isImageClass || isLargeMedia) && hasLittleText) {
-                // 确保它在屏幕有效可视范围内，并且排除了顶部的封面大图（Y坐标必须大于屏幕高度的 30%）
-                if (rect.centerY() > screenHeight * 0.3 && rect.centerY() < screenHeight - 200) {
+                // 确保它在屏幕有效可视范围内，并且排除了顶部的封面大图（Y坐标必须大于屏幕高度的 35%）
+                // 增加高度上限限制，防止误认整个网页或巨大的背景容器为帖子图片
+                if (rect.centerY() > screenHeight * 0.35 && rect.centerY() < screenHeight - 200 && h < screenHeight * 0.8) {
                     imageNodes.add(node)
                 }
             }
@@ -363,10 +369,10 @@ class FBAutomationService : AccessibilityService() {
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastScrollTime > 2000) {
                 Log.i(TAG, "未在当前视图发现分享按钮，强制触发滑动...")
-                // 确保在主线程执行手势
+                // 确保在主线程执行手势，并更新滚动时间防止并发
+                lastScrollTime = currentTime
                 scope.launch {
                     swipeUp()
-                    lastScrollTime = System.currentTimeMillis()
                 }
             }
         }

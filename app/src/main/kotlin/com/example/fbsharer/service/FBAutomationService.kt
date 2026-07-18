@@ -41,8 +41,8 @@ class FBAutomationService : AccessibilityService() {
             while (isRunning) {
                 if (currentTask != null && currentState != State.IDLE && currentState != State.NAVIGATING && currentState != State.WAITING) {
                     val currentTime = System.currentTimeMillis()
-                    // 仅当距上次滚动超过 2 秒时，才触发心跳检测（防止滚动期间被心跳打断或并发触发）
-                    if (currentTime - lastScrollTime > 2000) {
+                    // 仅当距上次滚动超过 3 秒时，才触发心跳检测（防止滚动期间被心跳打断或并发触发）
+                    if (currentTime - lastScrollTime > 3000) {
                         Log.v(TAG, "心跳检查: 当前状态 $currentState")
                         runCurrentStateLogic()
                     }
@@ -185,7 +185,7 @@ class FBAutomationService : AccessibilityService() {
         if (rootNode == null) {
             Log.w(TAG, "无法获取当前窗口根节点，尝试主动滑动触发页面刷新")
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastScrollTime > 2000) {
+            if (currentTime - lastScrollTime > 3000) {
                 lastScrollTime = currentTime
                 scope.launch {
                     swipeUp()
@@ -367,7 +367,7 @@ class FBAutomationService : AccessibilityService() {
             }
         } else {
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastScrollTime > 2000) {
+            if (currentTime - lastScrollTime > 3000) {
                 Log.i(TAG, "未在当前视图发现分享按钮，强制触发滑动...")
                 // 确保在主线程执行手势，并更新滚动时间防止并发
                 lastScrollTime = currentTime
@@ -694,7 +694,7 @@ class FBAutomationService : AccessibilityService() {
                 }
             } else {
                 val currentTime = System.currentTimeMillis()
-                if (currentTime - lastScrollTime > 2000) {
+                if (currentTime - lastScrollTime > 3000) {
                     Log.d(TAG, "当前页面的所有可见小组都已分享过，尝试滚动寻找更多")
                     scope.launch {
                         swipeUp()
@@ -912,52 +912,39 @@ class FBAutomationService : AccessibilityService() {
     }
 
     private fun swipeUp() {
-        val displayMetrics = resources.displayMetrics
-        val width = displayMetrics.widthPixels
-        val height = displayMetrics.heightPixels
-
         Log.i(TAG, "正在执行强制滚动手势 (缓慢模式)...")
-
-        val path = Path()
-        // 把滑动范围大幅度缩小，完全集中在屏幕正中间
-        // 从 60% 滑到 40%，远离任何屏幕边缘
-        path.moveTo(width / 2f, height * 0.6f)
-        path.lineTo(width / 2f, height * 0.4f)
-
-        val gestureBuilder = GestureDescription.Builder()
-        // 把滑动时间从 600 毫秒拉长到 1500 毫秒，变成“慢慢拖动”而不是“快速猛划(Fling)”
-        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 1500))
+        val displayMetrics = resources.displayMetrics
+        val height = displayMetrics.heightPixels
+        val width = displayMetrics.widthPixels
         
-        val result = dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
+        // 滑动幅度加大：从屏幕 80% 底部滑到 20% 顶部，且为了防止触发状态栏，避开最边缘
+        // 滑动时间适当缩短到 1000ms，让滚动速度变快一点
+        val path = Path().apply {
+            moveTo(width / 2f, height * 0.8f)
+            lineTo(width / 2f, height * 0.2f)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 1000))
+            .build()
+            
+        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                Log.d(TAG, "手势下发完成")
-                if (currentState == State.FINDING_POST) {
-                    scope.launch {
-                        delay(1200)
-                        Log.d(TAG, "滚动完成，重新扫描分享按钮")
-                        runCurrentStateLogic()
-                    }
-                }
-            }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                Log.e(TAG, "手势被系统拦截，请检查是否有覆盖层")
-            }
-        }, null)
-
-        if (!result) {
-            Log.e(TAG, "手势启动失败，切换系统底层滚动指令...")
-            // Fallback: 尝试对当前根节点执行前向滚动动作
-            val scrollPerformed = rootInActiveWindow?.performAction(
-                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-            ) == true
-            Log.d(TAG, "节点前向滚动结果: $scrollPerformed")
-            if (scrollPerformed && currentState == State.FINDING_POST) {
+                super.onCompleted(gestureDescription)
+                Log.d(TAG, "滚动手势完成")
+                // 滚动后延迟一段时间，让页面加载新内容
                 scope.launch {
-                    delay(1200)
-                    Log.d(TAG, "节点滚动完成，重新扫描分享按钮")
+                    delay(1500)
                     runCurrentStateLogic()
                 }
             }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                super.onCancelled(gestureDescription)
+                Log.e(TAG, "手势被系统拦截，请检查是否有覆盖层")
+            }
+        }, null)
+        
+        if (!dispatched) {
+            Log.e(TAG, "dispatchGesture 返回 false，手势分发失败")
         }
     }
 

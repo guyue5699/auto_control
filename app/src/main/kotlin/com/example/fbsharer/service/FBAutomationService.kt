@@ -764,8 +764,10 @@ class FBAutomationService : AccessibilityService() {
             val finalPostBtn = nodes.find { node ->
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
-                // 右上角特征：位于屏幕上半部分，且偏右
-                rect.top < 300 && rect.right > screenWidth * 0.6
+                val h = Math.abs(rect.bottom - rect.top)
+                val w = Math.abs(rect.right - rect.left)
+                // 右上角特征：位于屏幕上半部分，且偏右，且尺寸是一个正常的按钮，而不是巨大的容器
+                rect.top < 400 && rect.right > screenWidth * 0.5 && h in 20..200 && w in 40..(screenWidth / 2)
             }
             
             if (finalPostBtn != null) {
@@ -807,7 +809,9 @@ class FBAutomationService : AccessibilityService() {
             if (postKeywords.any { text.contains(it, ignoreCase = true) }) {
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
-                if (rect.top < 300 && rect.right > screenWidth * 0.6) {
+                val h = Math.abs(rect.bottom - rect.top)
+                val w = Math.abs(rect.right - rect.left)
+                if (rect.top < 400 && rect.right > screenWidth * 0.5 && h in 20..200 && w in 40..(screenWidth / 2)) {
                     Log.d(TAG, "深度遍历找到最终发布按钮，点击")
                     currentState = State.WAITING
                     performClick(node)

@@ -526,54 +526,73 @@ class FBAutomationService : AccessibilityService() {
 
     private fun findAndClickShareToGroup() {
         val rootNode = rootInActiveWindow
-        val exactGroupKeywords = listOf("分享到小组", "Share to a group", "转发到小组")
+        
+        // Facebook 的分享菜单往往是一个底部弹出的 BottomSheet
+        // 我们不应该只找确切的文字，应该采用模糊匹配，并且要兼容各种语言
+        val groupKeywords = listOf("小组", "Group", "group", "群组", "社团")
         
         // 1. 优先尝试使用原生节点查询（最稳定，不需要截图）
         if (rootNode != null) {
-            for (keyword in exactGroupKeywords) {
-                val nodes = rootNode.findAccessibilityNodeInfosByText(keyword)
-                if (nodes.isNotEmpty()) {
-                    val validNode = nodes.find { it.isClickable || it.parent?.isClickable == true } ?: nodes[0]
-                    Log.i(TAG, "🎯 通过原生节点找到‘分享到小组’，执行点击")
-                    stateFailCount = 0
-                    currentState = State.WAITING
-                    performClick(validNode)
-                    scope.launch {
-                        delay(1500) // 等待页面跳转到选择小组列表
-                        currentState = State.SELECTING_GROUP
-                        runCurrentStateLogic()
-                    }
-                    return
+            val candidateNodes = mutableListOf<AccessibilityNodeInfo>()
+            val deque = ArrayDeque<AccessibilityNodeInfo>()
+            deque.add(rootNode)
+            
+            while (deque.isNotEmpty()) {
+                val node = deque.removeFirst()
+                val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+                
+                // 只要文字包含“小组”或者“Group”，就认为可能是目标按钮
+                if (groupKeywords.any { text.contains(it, ignoreCase = true) }) {
+                    candidateNodes.add(node)
+                }
+                
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { deque.add(it) }
                 }
             }
-        }
-        
-        // 2. 如果原生节点找不到，再尝试使用 OCR
-        Log.d(TAG, "原生节点未找到，尝试通过 OCR 寻找分享到小组按钮...")
-        findTextByOCRAndClick(
-            keywords = exactGroupKeywords,
-            onSuccess = {
+            
+            if (candidateNodes.isNotEmpty()) {
+                // 优先找可点击的节点，或者找父节点是可点击的
+                val validNode = candidateNodes.find { it.isClickable } 
+                    ?: candidateNodes.find { it.parent?.isClickable == true }?.parent 
+                    ?: candidateNodes[0]
+                    
+                Log.i(TAG, "🎯 通过原生节点找到‘分享到小组’相关的按钮: ${validNode.text ?: validNode.contentDescription}，执行点击")
                 stateFailCount = 0
                 currentState = State.WAITING
+                performClick(validNode)
                 scope.launch {
-                    delay(1500) // 等待页面跳转到选择小组列表
+                    delay(2000) // 等待页面跳转到选择小组列表
                     currentState = State.SELECTING_GROUP
                     runCurrentStateLogic()
                 }
-            },
-            onNotFound = {
-                stateFailCount++
-                Log.v(TAG, "当前屏幕未发现‘分享到小组’按钮，尝试向上滚动菜单寻找...")
-                // 如果没找到，很可能是菜单太长被折叠在下面了，执行滚动操作
-                val currentTime = System.currentTimeMillis()
-                if (currentTime - lastScrollTime > 2000) {
-                    lastScrollTime = currentTime
-                    scope.launch {
-                        swipeUp()
-                    }
-                }
+                return
             }
-        )
+        }
+        
+        // 如果原生节点找不到，很可能是菜单没弹出来，或者被折叠了
+        stateFailCount++
+        Log.v(TAG, "当前屏幕未发现‘分享到小组’相关的原生节点，尝试向上滚动菜单寻找...")
+        
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastScrollTime > 2000) {
+            lastScrollTime = currentTime
+            scope.launch {
+                swipeUp()
+            }
+        }
+        
+        if (stateFailCount > 8) {
+            Log.w(TAG, "长时间未找到‘分享到小组’，执行返回重试...")
+            stateFailCount = 0
+            currentState = State.WAITING
+            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            scope.launch {
+                delay(1500)
+                currentState = State.FINDING_POST
+                runCurrentStateLogic()
+            }
+        }
     }
 
     // 扩展属性用于获取 Rect (兼容旧代码)

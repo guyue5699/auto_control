@@ -648,6 +648,7 @@ class FBAutomationService : AccessibilityService() {
             
             // 我们不直接按系统返回键，因为如果菜单没弹出来，按返回键就会退出浏览器！
             // 解决办法：直接点击屏幕最上方区域（空白处），这可以安全地关掉任何底部弹出的菜单，同时不会触发系统返回退出浏览器。
+            val screenWidth = resources.displayMetrics.widthPixels
             performGestureClick(screenWidth / 2f, 100f)
             
             currentState = State.WAITING

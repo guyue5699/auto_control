@@ -249,7 +249,9 @@ class FBAutomationService : AccessibilityService() {
         // 收集屏幕上半部分以下（>25%）所有的疑似按钮节点
         val candidateNodes = mutableListOf<AccessibilityNodeInfo>()
         val deque = ArrayDeque<AccessibilityNodeInfo>()
-        deque.add(rootNode)
+        if (rootNode != null) {
+            deque.add(rootNode)
+        }
         
         while (deque.isNotEmpty()) {
             val node = deque.removeFirst()
@@ -347,14 +349,19 @@ class FBAutomationService : AccessibilityService() {
                 runCurrentStateLogic()
             }
         } else {
+            stateFailCount++
+            Log.v(TAG, "当前屏幕未发现分享按钮，向下滚动...")
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastScrollTime > 3000) {
-                Log.i(TAG, "未在当前视图发现分享按钮，强制触发滑动...")
-                // 确保在主线程执行手势，并更新滚动时间防止并发
+            if (currentTime - lastScrollTime > 2000) {
                 lastScrollTime = currentTime
                 scope.launch {
-                    swipeUp()
+                    swipeUp() // 使用快速大跳滚动
                 }
+            }
+            // 如果连续8次都找不到，为了防死循环，强制重置状态
+            if (stateFailCount > 8) {
+                Log.w(TAG, "连续多次滚动仍未找到分享按钮，重置计数")
+                stateFailCount = 0
             }
         }
     }

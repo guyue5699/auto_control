@@ -279,7 +279,11 @@ class FBAutomationService : AccessibilityService() {
             }
             
             if (isChromeNode && hasShareKeyword) {
-                exactShareNode = node
+                // 确保它不是一个巨大的容器节点
+                if (h in 20..200 && w in 20..(screenWidth / 2)) {
+                    Log.d(TAG, "🔍 发现带文字标签的疑似分享按钮: text=[$textStr] desc=[$contentDesc] rect=[${rect.toShortString()}]")
+                    exactShareNode = node
+                }
             }
             
             for (i in 0 until node.childCount) {
@@ -371,10 +375,16 @@ class FBAutomationService : AccessibilityService() {
         }
 
         if (validShareNode != null) {
-            Log.i(TAG, "🎯 锁定分享按钮，执行物理模拟点击")
+            val rect = Rect()
+            validShareNode.getBoundsInScreen(rect)
+            val textStr = validShareNode.text?.toString() ?: validShareNode.contentDescription?.toString() ?: "纯图标"
+            Log.i(TAG, "🎯 锁定分享按钮，准备点击! 坐标: [${rect.centerX()}, ${rect.centerY()}] 识别文本: [$textStr]")
+            
             stateFailCount = 0
             currentState = State.WAITING
+            
             performClick(validShareNode)
+            
             scope.launch {
                 delay(1500) // 等待分享菜单动画完全弹出
                 currentState = State.OPENING_SHARE_MENU
@@ -633,12 +643,16 @@ class FBAutomationService : AccessibilityService() {
         }
         
         if (stateFailCount > 8) {
-            Log.w(TAG, "长时间未找到‘分享到小组’，执行返回重试...")
+            Log.w(TAG, "长时间未找到‘分享到小组’，可能点错了或者是不能分享的帖子。放弃本次分享，继续往下滚...")
             stateFailCount = 0
+            
+            // 我们不直接按系统返回键，因为如果菜单没弹出来，按返回键就会退出浏览器！
+            // 解决办法：直接点击屏幕最上方区域（空白处），这可以安全地关掉任何底部弹出的菜单，同时不会触发系统返回退出浏览器。
+            performGestureClick(screenWidth / 2f, 100f)
+            
             currentState = State.WAITING
-            performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
             scope.launch {
-                delay(1500)
+                delay(1000)
                 currentState = State.FINDING_POST
                 runCurrentStateLogic()
             }

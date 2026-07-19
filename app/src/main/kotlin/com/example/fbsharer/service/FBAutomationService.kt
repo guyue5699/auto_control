@@ -258,8 +258,11 @@ class FBAutomationService : AccessibilityService() {
             val h = Math.abs(rect.bottom - rect.top)
             val w = Math.abs(rect.right - rect.left)
             
+            // 必须是在 Chrome 浏览器内的节点，排除掉我们自己的悬浮窗或系统UI
+            val isChromeNode = node.packageName?.toString()?.contains("chrome") == true
+            
             // 只要在屏幕 25% 以下区域，并且具有一定大小的独立节点
-            if (rect.centerY() > screenHeight * 0.25 && h in 20..200 && w in 20..(screenWidth / 2)) {
+            if (isChromeNode && rect.centerY() > screenHeight * 0.25 && h in 20..200 && w in 20..(screenWidth / 2)) {
                 if (node.isClickable || node.className?.contains("Image") == true || node.className?.contains("Button") == true) {
                     candidateNodes.add(node)
                 }
@@ -268,7 +271,7 @@ class FBAutomationService : AccessibilityService() {
             // 顺便找找有没有原生的带“分享”标签的按钮
             val contentDesc = node.contentDescription?.toString() ?: ""
             val textStr = node.text?.toString() ?: ""
-            if (shareKeywords.any { contentDesc.contains(it, ignoreCase = true) || textStr.contains(it, ignoreCase = true) }) {
+            if (isChromeNode && shareKeywords.any { contentDesc.contains(it, ignoreCase = true) || textStr.contains(it, ignoreCase = true) }) {
                 exactShareNode = node
             }
             
@@ -290,12 +293,19 @@ class FBAutomationService : AccessibilityService() {
             }.values.filter { it.size >= 2 } // 只要有2个以上的同行按钮（比如赞、分享）就算数
             
             if (rows.isNotEmpty()) {
-                // 【关键修复】：取屏幕中“最靠上”的一排按钮（即当前屏幕上第一个帖子的底栏）
-                // 之前写成了最靠下，导致完美错过了屏幕中间的按钮！
+                // 【关键修复】：取屏幕中“最靠上”的一排按钮
+                // 必须过滤掉主页顶部的发帖工具栏（如：照片、签到、生活纪事）
                 val targetRow = rows.filter { row ->
                     val r = Rect()
                     row[0].getBoundsInScreen(r)
-                    r.centerY() < screenHeight - 150 // 排除底部的系统导航栏和下载广告条
+                    
+                    // 检查这一排按钮中是否包含“发帖”相关的干扰词
+                    val hasCreatePostWords = row.any { node ->
+                        val text = node.text?.toString() ?: node.contentDescription?.toString() ?: ""
+                        text.contains("照片") || text.contains("签到") || text.contains("生活") || text.contains("Photo")
+                    }
+                    
+                    r.centerY() < screenHeight - 150 && !hasCreatePostWords
                 }.minByOrNull { row ->
                     val r = Rect()
                     row[0].getBoundsInScreen(r)
@@ -313,7 +323,8 @@ class FBAutomationService : AccessibilityService() {
                     // 过滤掉最右侧可能是“三个点”或“更多”的按钮
                     val filteredRow = sortedRow.filter { node ->
                         val desc = node.contentDescription?.toString() ?: ""
-                        !desc.contains("更多") && !desc.contains("More", true)
+                        val textStr = node.text?.toString() ?: ""
+                        !desc.contains("更多") && !desc.contains("More", true) && !textStr.contains("更多")
                     }
                     
                     if (filteredRow.isNotEmpty()) {

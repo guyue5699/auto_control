@@ -270,10 +270,15 @@ class FBAutomationService : AccessibilityService() {
                 }
             }
             
-            // 顺便找找有没有原生的带“分享”标签的按钮
+            // 顺便找找有没有原生的带“分享”标签的按钮（防止误点包含分享二字的长文本帖子）
             val contentDesc = node.contentDescription?.toString() ?: ""
             val textStr = node.text?.toString() ?: ""
-            if (isChromeNode && shareKeywords.any { contentDesc.contains(it, ignoreCase = true) || textStr.contains(it, ignoreCase = true) }) {
+            val hasShareKeyword = shareKeywords.any { 
+                (contentDesc.contains(it, ignoreCase = true) && contentDesc.length < 15) || 
+                (textStr.contains(it, ignoreCase = true) && textStr.length < 15) 
+            }
+            
+            if (isChromeNode && hasShareKeyword) {
                 exactShareNode = node
             }
             
@@ -295,6 +300,18 @@ class FBAutomationService : AccessibilityService() {
             }.values.filter { it.size >= 2 } // 只要有2个以上的同行按钮（比如赞、分享）就算数
             
             if (rows.isNotEmpty()) {
+                Log.d(TAG, "🔍 结构分析：屏幕上发现 ${rows.size} 排候选按钮")
+                rows.forEachIndexed { index, row ->
+                    val r = Rect()
+                    row[0].getBoundsInScreen(r)
+                    Log.d(TAG, "  👉 第 $index 排 (Y=${r.centerY()}): 包含 ${row.size} 个按钮")
+                    row.forEach { n ->
+                        val nr = Rect()
+                        n.getBoundsInScreen(nr)
+                        Log.v(TAG, "      - 按钮: [${nr.left},${nr.top}-${nr.right},${nr.bottom}] text=${n.text} desc=${n.contentDescription}")
+                    }
+                }
+
                 // 【关键修复】：取屏幕中“最靠上”的一排按钮
                 // 必须过滤掉主页顶部的发帖工具栏（如：照片、签到、生活纪事）
                 val targetRow = rows.filter { row ->
@@ -307,6 +324,13 @@ class FBAutomationService : AccessibilityService() {
                         text.contains("照片") || text.contains("签到") || text.contains("生活") || text.contains("Photo")
                     }
                     
+                    if (hasCreatePostWords) {
+                        Log.d(TAG, "  🚫 过滤掉发帖工具栏: Y=${r.centerY()}")
+                    }
+                    if (r.centerY() >= screenHeight - 150) {
+                        Log.d(TAG, "  🚫 过滤掉底部系统栏/广告: Y=${r.centerY()}")
+                    }
+                    
                     r.centerY() < screenHeight - 150 && !hasCreatePostWords
                 }.minByOrNull { row ->
                     val r = Rect()
@@ -315,11 +339,15 @@ class FBAutomationService : AccessibilityService() {
                 }
                 
                 if (targetRow != null) {
+                    val r = Rect()
+                    targetRow[0].getBoundsInScreen(r)
+                    Log.d(TAG, "✅ 最终选中目标排: Y=${r.centerY()}")
+                    
                     // 从左到右排序
                     val sortedRow = targetRow.sortedBy { 
-                        val r = Rect()
-                        it.getBoundsInScreen(r)
-                        r.left 
+                        val nr = Rect()
+                        it.getBoundsInScreen(nr)
+                        nr.left 
                     }
                     
                     // 过滤掉最右侧可能是“三个点”或“更多”的按钮
@@ -334,7 +362,11 @@ class FBAutomationService : AccessibilityService() {
                         validShareNode = filteredRow.last()
                         Log.d(TAG, "🎯 主页：通过结构位置找到分享图标")
                     }
+                } else {
+                    Log.d(TAG, "❌ 过滤后没有符合条件的按钮排")
                 }
+            } else {
+                Log.d(TAG, "❌ 没有找到任何包含2个以上按钮的排")
             }
         }
 
